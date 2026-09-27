@@ -831,6 +831,8 @@ Stable tab ids look like `t1`, `t2`, and `t3`. Optional user labels such as `doc
 | --- | --- |
 | `tab` | List open tabs by default. |
 | `tab list` | List open tabs with ids and labels. |
+| `tab <id>` (e.g. `tab t1`) | Select the tab for subsequent commands. There is no `tab select` subcommand — pass the bare label (wave4 W-N2: `tab select t1` is rejected pre-spawn with this guidance). |
+| `--tab <id>` (flag) | Scope a single command to that tab without changing the session's active tab. |
 | `tab new [url]` | Open a new tab. |
 | `tab new --label <name> [url]` | Open a new tab with a user label. |
 | `tab <t<N>|label>` | Switch to a tab by id or label. CDP target ids from `tab list --json` are also accepted and stay stable across daemon restarts. |
