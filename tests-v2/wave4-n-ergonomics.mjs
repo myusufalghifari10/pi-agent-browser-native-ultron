@@ -81,4 +81,12 @@ const injected = buildRestoreBatchRows(compiledRows, "https://the-internet.herok
 assert.deepEqual(injected, [["state", "load", "/tmp/x.state"], ["open", "https://the-internet.herokuapp.com"], ["get", "url"], ["snapshot"]], "gate injection places open after load, before get url+snapshot");
 assert.equal(buildRestoreBatchRows([["snapshot"]], "https://x.example.com"), undefined, "no load row → no injection");
 assert.equal(buildRestoreBatchRows([["state", "load", "/tmp/x"], ["snapshot"]], ""), undefined, "empty target → no injection");
-console.log("OK: 19 wave4 checks passed (W-N1 timeoutMs + P28 originals + W-N3 extinct-target follow + W-N2 tab select teaching + W-A1 batch array stdin + W-V1 restore rows).");
+// --- W-N1c: double-encoded stdin survives hosts that re-coerce arrays (comma-join) ---------------
+const TOOL2 = ( () => { let captured; const pi2 = { registerTool: (t) => { captured = t; }, on: () => {} }; extensionFactory(pi2, {}); return captured; } )();
+const dqOut = TOOL2.prepareArguments({ args: ["batch"], stdin: "\"[[\\\"get\\\", \\\"title\\\"]]\"" });
+assert.equal(Array.isArray(dqOut.stdin), true, "double-encoded JSON string stdin is parsed down to a real array");
+const sqOut = TOOL2.prepareArguments({ args: ["batch"], stdin: "[[\"get\",\"title\"]]" });
+assert.equal(Array.isArray(sqOut.stdin), true, "single-encoded JSON string stdin still parses to a real array");
+const plainOut = TOOL2.prepareArguments({ args: ["batch"], stdin: "get,title" });
+assert.equal(plainOut.stdin, "get,title", "non-JSON plain string stdin is left untouched");
+console.log("OK: 22 wave4 checks passed (W-N1 timeoutMs + P28 originals + W-N3 extinct-target follow + W-N2 tab select teaching + W-A1 batch array stdin + W-N1c double-encoded stdin + W-V1 restore rows).");

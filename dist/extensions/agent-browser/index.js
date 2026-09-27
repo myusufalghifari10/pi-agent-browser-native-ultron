@@ -1359,8 +1359,42 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         ].map((k) => [k, {}])),
         additionalProperties: true,
     };
+    // wave4 (live-sweep W-N1/W-N1b): the Pi runtime hands raw model params straight to execute and
+    // only some hosts invoke prepareArguments, so normalization must live at module scope and run in
+    // execute too. Providers stringify numeric companion params — a JSON-numeric "20000" reached the
+    // timeoutMs validation as a string and failed; JSON-string args/stdin/mode-object forms are
+    // parsed as documented. Idempotent: already-parsed values pass through unchanged.
+    function normalizeAgentBrowserParams(input) {
+        if (!input || typeof input !== "object" || Array.isArray(input)) return input;
+        const out = { ...input };
+        for (const key of ["args", "stdin"]) {
+            // Some hosts JSON-decode param values and re-coerce arrays (comma-join); a caller can
+            // survive that by double-encoding. Parse repeatedly (bounded) while the value is a
+            // JSON-encoded string, stopping at the first array.
+            for (let pass = 0; pass < 2 && typeof out[key] === "string"; pass += 1) {
+                try {
+                    const parsed = JSON.parse(out[key]);
+                    if (Array.isArray(parsed) || typeof parsed === "string") out[key] = parsed;
+                } catch {}
+            }
+        }
+        if (typeof out.timeoutMs === "string" && out.timeoutMs.trim() !== "" && Number.isFinite(Number(out.timeoutMs))) {
+            out.timeoutMs = Number(out.timeoutMs);
+        }
+        for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
+            const value = out[key];
+            if (typeof value === "string") {
+                try {
+                    const parsed = JSON.parse(value);
+                    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out[key] = parsed;
+                } catch {}
+            }
+        }
+        return out;
+    }
     const agentBrowserTool = {
         name: "agent_browser",
+        prepareArguments: normalizeAgentBrowserParams,
         label: "Agent Browser",
         description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, checkpoint (auth-snapshot save/restore/list), devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
         promptSnippet: "Browser automation: open/click/fill/scrape live pages; use for ALL browser work, guide in docs/COMMAND_REFERENCE.md.",
@@ -1369,37 +1403,6 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         // (pi core's own edit tool compensates for exactly this via prepareEditArguments). Without this,
         // `args` arrives as a string, Array.isArray fails, and every args-mode call reports
         // "Provide exactly one input mode" (zero modes supplied). JSON-parse stringified mode fields only.
-        prepareArguments(input) {
-            if (!input || typeof input !== "object" || Array.isArray(input)) return input;
-            const out = { ...input };
-            for (const key of ["args", "stdin"]) {
-                const value = out[key];
-                if (typeof value === "string") {
-                    try {
-                        const parsed = JSON.parse(value);
-                        if (Array.isArray(parsed)) out[key] = parsed;
-                    } catch {}
-                }
-            }
-            // wave4 (live-sweep W-N1): some providers stringify numeric companion params, so a
-            // JSON-numeric "20000" reached the timeoutMs validation as a string and failed with
-            // "timeoutMs must be a positive integer when provided" even though the caller sent a
-            // valid integer. De-stringify a finite numeric string before validation; non-numeric
-            // strings are left untouched so the existing validation error still fires for them.
-            if (typeof out.timeoutMs === "string" && out.timeoutMs.trim() !== "" && Number.isFinite(Number(out.timeoutMs))) {
-                out.timeoutMs = Number(out.timeoutMs);
-            }
-            for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
-                const value = out[key];
-                if (typeof value === "string") {
-                    try {
-                        const parsed = JSON.parse(value);
-                        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out[key] = parsed;
-                    } catch {}
-                }
-            }
-            return out;
-        },
         parameters: AGENT_BROWSER_PARAMS_SLIM,
         renderCall(args, theme, context) {
             const text = context.lastComponent instanceof Text ? context.lastComponent : new Text("", 0, 0);
@@ -1414,6 +1417,8 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
             return component;
         },
         async execute(toolCallId, params, signal, onUpdate, ctx, nativeToolCallId = toolCallId) {
+            // wave4 (W-N1b): normalize raw runtime params here too (see module note above).
+            params = normalizeAgentBrowserParams(params);
             const promptPolicy = buildPromptPolicy(getLatestUserPrompt(ctx.sessionManager.getBranch()));
             const outputPath = isRecord(params) && typeof params.outputPath === "string" ? params.outputPath : undefined;
             const resolvedInput = resolveAgentBrowserInput({
