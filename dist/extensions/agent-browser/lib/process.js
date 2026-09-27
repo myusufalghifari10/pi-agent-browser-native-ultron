@@ -8,6 +8,7 @@ import { parseArgvDescriptor } from "./argv-descriptor.js";
 import { extractExplicitSessionName, resolveAgentBrowserNamespace, scanUpstreamGlobalFlagOccurrences } from "./argv-grammar.js";
 import { commitManagedSessionRestoreSuppression, getManagedSessionRestoreEnv, getManagedSessionRestoreProtectedEnv, getOwnedManagedSessionCompatibilityEnv, getOwnedManagedSessionNamespaceEnv, isOwnedManagedSessionTarget, validateManagedSessionRestoreContextForSpawn, } from "./managed-session-restore.js";
 import { getPageTargetValidationError, } from "./page-target-validation.js";
+import { verifyPatchLedger } from "./patches-ledger.js";
 import { getImplicitSessionIdleTimeoutMs } from "./runtime.js";
 import { getAgentBrowserProcessEnvironment } from "./process-environment.js";
 import { openSecureTempFile, writeSecureTempChunk } from "./temp.js";
@@ -312,6 +313,21 @@ function getManagedPreSpawnPolicyError(options, currentPageUrl, pageUrlUnknown =
         stdin: options.stdin,
     });
 }
+/** Local patches are this copy's real behavior: refuse to spawn drifted code instead of failing mysteriously later. */
+async function getPatchLedgerSpawnError() {
+    let ledger;
+    try {
+        ledger = await verifyPatchLedger();
+    }
+    catch (error) {
+        return `Patch integrity ledger could not be verified (${error instanceof Error ? error.message : String(error)}). Local patches drifted from patches/patches.manifest.json — re-apply per PATCHES.md before continuing. No silent fallback.`;
+    }
+    if (ledger.ok)
+        return undefined;
+    const offending = [...ledger.drifted.map((file) => `drifted: ${file}`), ...ledger.missing.map((file) => `missing: ${file}`)].join("; ");
+    return `Local patches drifted from patches/patches.manifest.json (${offending}) — re-apply per PATCHES.md before continuing. No silent fallback.`;
+}
+
 export async function runAgentBrowserProcess(options) {
     const { cwd, env, managedSessionRestoreState, managedStateCurrentPageUrl, managedStatePageUrlUnknown, signal, stdin } = options;
     const preserveAttachedBrowserSession = options.preserveAttachedBrowserSession === true || attachedBrowserSessionContext.getStore() === true;
@@ -320,6 +336,18 @@ export async function runAgentBrowserProcess(options) {
     const timeoutMs = options.timeoutMs ?? getAgentBrowserProcessTimeoutMs();
     if (signal?.aborted) {
         return { aborted: true, agentBrowserStarted: false, exitCode: 1, stderr: "", stdout: "", timedOut: false };
+    }
+    const patchLedgerError = await getPatchLedgerSpawnError();
+    if (patchLedgerError) {
+        return {
+            aborted: false,
+            agentBrowserStarted: false,
+            exitCode: 1,
+            spawnError: new Error(patchLedgerError),
+            stderr: "",
+            stdout: "",
+            timedOut: false,
+        };
     }
     const parentEnv = getAgentBrowserProcessEnvironment();
     const managedSessionRestoreOptions = {

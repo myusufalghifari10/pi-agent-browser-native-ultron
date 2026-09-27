@@ -3,9 +3,6 @@ export const PROJECT_RULE_PROMPT = "Project rule: when browser automation is nee
 export const TOOL_PROMPT_GUIDELINES_PREFIX = [
     "Use agent_browser for real browser or live web content.",
 ];
-export function buildInstalledDocsGuideline(paths) {
-    return `For detailed agent_browser docs, read targeted sections: ${paths.readmePath} (setup), ${paths.commandReferencePath} (commands), ${paths.toolContractPath} (result/details). Do not load the full command reference unless needed.`;
-}
 export const QUICK_START_GUIDELINES = [
     `Quick start mental model: use exactly one of script (one-shot JavaScript orchestration), args (exact agent-browser CLI args after the binary), semanticAction (a thin shorthand compiled to find argv for locator actions, direct selector/ref click/check/fill, or select argv for native dropdowns), job (a constrained short-workflow schema compiled to batch --bail by default; set failFast:false only when later diagnostics remain safe if an earlier navigation fails), qa (a lightweight fail-fast QA preset built on batch --bail with bounded visible expected-text checks, including qa.attached for current sessions), electron (desktop Electron list/launch/status/cleanup/probe), or the experimental sourceLookup / networkSourceLookup helpers (candidates only; each compiled to batch); stdin is only for batch, eval --stdin, auth save --password-stdin, and wrapper-generated batch stdin from job, qa, sourceLookup, or networkSourceLookup, and is rejected with electron; sessionMode=fresh switches the extension-managed pi-scoped session to a fresh upstream launch when you need new launch-scoped flags (${LAUNCH_SCOPED_FLAG_LABEL}) to apply. Use outputPath for durable eval/get/snapshot captures. Do not pass --json in args; the wrapper injects it.`,
     "Use script only when loops, conditional page branches, or multi-page aggregation would otherwise require several top-level calls: call await browser({ args, stdin?, timeoutMs? }), check each returned { ok, data, error, details, failureCategory, nextActions, resultCategory, summary, text } envelope, and call emit(value) for the one final JSON value. Script runs in a one-shot isolated session without profiles, attachments, imports, host filesystem/network/process access, caller session controls, or inherited agent-browser launch/proxy settings; inner browser calls and their response envelopes are serialized and bounded, compatible suggested next actions can be passed back to browser(), and the wrapper always closes that session. One top-level approval can authorize up to 25 inner calls, so inspect the full source before approval. Use args/job/qa for ordinary linear work.",
@@ -61,9 +58,6 @@ export const SHARED_BROWSER_PLAYBOOK_GUIDELINES = [
     "Recording needs ffmpeg on PATH before start. Current upstream checks it at startup; older natives may defer failure. A pending recording is not verified output.",
     "Do not call --help or other exploratory inspection commands unless the user explicitly asks for them or debugging the browser integration is necessary.",
 ];
-export const TOOL_PROMPT_GUIDELINES_SUFFIX = [
-    "Prefer agent_browser over bash, osascript, AppleScript, or generic browser shell for sites, docs, clicks, fills, screenshots, eval, and batch.",
-];
 export const INSPECTION_TOOL_CALL_EXAMPLES = [
     '{ "args": ["--help"] }',
     '{ "args": ["--version"] }',
@@ -76,22 +70,21 @@ export const WRAPPER_TAB_RECOVERY_BEHAVIOR = [
     "If a known session target unexpectedly reports about:blank, agent_browser best-effort re-selects the prior intended target when it still exists; if recovery fails, it records the observed about:blank target and reports exact recovery guidance instead of treating the prior page as active.",
     "If upstream reports tab_gone, the pinned bound tab is gone; use details.nextActions (tab list / tab new) instead of assuming another tab is yours.",
 ];
-/** Tier A: always-on tool promptGuidelines (keep small; Tier B lives in SHARED_BROWSER_PLAYBOOK_GUIDELINES and docs). */
+/** Tier A: always-on tool promptGuidelines — slimmed per browser-redesign FINAL-DESIGN §2.1:
+ * exactly 5 invariants + the 4-gate map; joined with the docs guide-gate pointer it must stay ≤900
+ * chars (guard: tests-v2/wave1-d-prompt-length.mjs). Deeper guidance is failure-driven teaching via
+ * details.nextActions plus docs/COMMAND_REFERENCE.md; Tier B detail lives in
+ * SHARED_BROWSER_PLAYBOOK_GUIDELINES and docs. The P26 obedience rule and visible-browser default
+ * live in the operator's AGENTS.md rules 1-2, which are always in context. */
 export const RUNTIME_PROMPT_GUIDELINES = [
-    // local patch: the obedience rule and the visible-browser default live here, not in PROJECT_RULE_PROMPT,
-    // because that one is appended by `before_agent_start` only when the user's prompt matches
-    // English-oriented browser patterns - so an Indonesian request could miss both (PATCHES.md P26).
-    "Follow the user's explicit instructions directly: do what was asked and report the result. Raise a concern at most once and briefly, only when an action is destructive, irreversible, or leaks a secret; once the user confirms or repeats the request, proceed without further objection or unsolicited alternatives.",
-    "Default to a visible browser the user can watch: launch the first call with `--headed` together with `sessionMode: \"fresh\"`, and stay headless only when the user asks for it or the run is an unattended batch. Changing an existing headless session requires `sessionMode: \"fresh\"`. A headed launch is a new browser with an empty profile, so carry an authenticated session over with `state save` then `--state <file>` (or reuse a persistent profile) instead of signing in again.",
-    "Use agent_browser with one input mode: args, script, semanticAction, job, qa, sourceLookup/networkSourceLookup, electron, debug, settle, networkBody, vault, devServer, or login. stdin: batch/eval/auth/wrapper batch only; electron/devServer reject it; never pass --json.",
-    "agent_browser extras: debug = one-shot devtools report (url/title, console, page errors, failed requests, bounded snapshot) instead of four separate calls; settle = wait for real page quiet before reading; networkBody = bounded body preview for one request; devServer = detect/wait/start/stop the local dev server; verbosity=quiet drops diagnostic prose while details keep everything.",
-    "agent_browser secrets: never type a password, card number, or 2FA code into the page yourself and never repeat one in chat. Use vault (list → fill) or login; the value goes to the page through the wrapper, details only report counts, and fills are refused unless the page origin exactly matches the saved origin. Card fills require the user's confirmation, and a declined fill must not be retried automatically.",
-    "For agent_browser, use open → snapshot -i → @refs; re-snapshot after changes. In authenticated unattended/auto-approved employee flows, ordinary requested non-destructive submissions may proceed. Honor explicit stops; require explicit authorization for purchases, production-control, destructive/irreversible, or account/security/privacy changes.",
-    "agent_browser bare calls share a root Pi browser with descendants, not unrelated roots; coordinate within the group. Native explicit sessions win. Use sessionMode=fresh for an intentional separate launch. Use requested/configured profiles only; verify auth after restart. Script is disposable.",
-    "agent_browser: exact user paths; verify artifactVerification/artifacts before success claims. Save promptGuard-required files before close; ffmpeg before recording; close keeps files; waited:timeout proves nothing.",
-    "When agent_browser details.nextActions exists, use them. Check Omitted high-value controls in dense snapshots. Dashboards: verify scroll via screenshot/snapshot.",
-    "agent_browser: read <url> for docs/text or active DOM; get title/url; get text/html/value/count <selector>; get attr <selector> <name>. Batch 3+ getters; heed visibility warnings.",
-    "agent_browser revealSecrets is the only way to un-redact auth headers, it is limited to network reads with a urlFilter, and it prints a warning and suppresses the spill. Use it only for auth debugging, then re-read without it.",
+    // local patch: slimmed Tier A (P23 keeps the secrets rule and the follow-nextActions rule here;
+    // git HEAD is the patched baseline — see PATCHES.md "Token-slim prompt surface").
+    "Use this tool for ALL browser work — never call agent-browser via bash.",
+    "Never type passwords/cards/2FA codes — use vault/login modes.",
+    "Verify important mutations (fresh snapshot / URL / text) before claiming success.",
+    "Honor explicit user stop boundaries — never purchase, order, or submit beyond explicit authorization.",
+    "Follow details.nextActions before improvising.",
+    "Gates — LIHAT: snapshot/read/diff/settle/debug · LAKUKAN: semanticAction/job · KELOLA: sessions/profiles/vault/devServer/electron · OTOMASI: script/qa/webmcp.",
 ];
 export function buildBrowserExecutablePathGuideline(executablePath) {
     if (!executablePath)
@@ -109,12 +102,11 @@ export function buildBrowserDefaultProfileGuideline(profile) {
 export function buildToolPromptGuidelines(options) {
     const browserDefaultProfileGuideline = buildBrowserDefaultProfileGuideline(options.browserDefaultProfile);
     const browserExecutablePathGuideline = buildBrowserExecutablePathGuideline(options.browserExecutablePath);
+    const docsGuideline = `Full guide (read on first use, guide-gate): ${options.docs?.commandReferencePath ?? "docs/COMMAND_REFERENCE.md"}`;
     return [
-        ...(options.includeWebSearch ? ["Prefer agent_browser_web_search for facts; agent_browser for pages."] : TOOL_PROMPT_GUIDELINES_PREFIX),
-        ...(options.docs ? [buildInstalledDocsGuideline(options.docs)] : []),
         ...RUNTIME_PROMPT_GUIDELINES,
+        docsGuideline,
         ...(browserExecutablePathGuideline ? [browserExecutablePathGuideline] : []),
         ...(browserDefaultProfileGuideline ? [browserDefaultProfileGuideline] : []),
-        TOOL_PROMPT_GUIDELINES_SUFFIX[0],
     ];
 }

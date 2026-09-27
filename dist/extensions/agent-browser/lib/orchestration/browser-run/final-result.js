@@ -303,7 +303,7 @@ function buildResultNextActions(options) {
     }
     else if (options.categoryDetails.resultCategory === "success" && (options.sessionTabCorrection || options.openResultTabCorrection))
         appendUnique(buildSessionTabRecoveryNextActions({ kind: "tab-drift", recoveryApplied: true, sessionName: options.executionPlan.sessionName, tabCorrection: options.sessionTabCorrection ?? options.openResultTabCorrection, target: options.currentSessionTabTarget ?? options.priorSessionTabTarget }));
-    if (options.categoryDetails.failureCategory === "stale-ref")
+    if (options.categoryDetails.failureCategory === "stale-ref" && options.recoveredBy !== "settle-retry")
         nextActions = [...buildSessionAwareStaleRefNextActions(options.executionPlan.sessionName)];
     if (options.visibleRefFallbackDiagnostic)
         append(buildVisibleRefFallbackNextActions({ diagnostic: options.visibleRefFallbackDiagnostic, sessionName: options.visibleRefFallbackSessionName }));
@@ -350,7 +350,7 @@ function buildResultNextActions(options) {
         appendUnique(buildTimeoutPartialProgressNextActions(options));
         appendUnique(buildDialogTimeoutNextActions({ command: options.executionPlan.commandInfo.command, sessionName: options.executionPlan.sessionName }));
     }
-    if (options.categoryDetails.failureCategory === "stale-ref" && options.redactedCompiledSemanticAction && isCompiledSemanticActionFindCommand(options.compiledSemanticAction))
+    if (options.categoryDetails.failureCategory === "stale-ref" && options.recoveredBy !== "settle-retry" && options.redactedCompiledSemanticAction && isCompiledSemanticActionFindCommand(options.compiledSemanticAction))
         append([{ id: "retry-semantic-action-after-stale-ref", params: { args: options.redactedCompiledSemanticAction.args }, reason: "Retry the same semantic target via its compiled find command after the upstream stale-ref failure proves the prior action did not execute.", safety: "Use only for the same intended target; direct stale @refs still require a fresh snapshot or stable locator before retrying.", tool: "agent_browser" }]);
     if (options.electronLaunchRecord)
         append(buildAgentBrowserNextActions({ electron: { launchId: options.electronLaunchRecord.launchId, sessionName: options.electronLaunchRecord.sessionName, status: options.electronLaunchRecord.cleanupState }, failureCategory: options.categoryDetails.failureCategory, resultCategory: options.categoryDetails.resultCategory, successCategory: options.categoryDetails.successCategory }));
@@ -396,6 +396,11 @@ function formatDebugReportText(report) {
 }
 function formatSettleReportText(report) {
     return report?.summary ? `Settle: ${report.summary}` : undefined;
+}
+// FINAL-DESIGN.md pillar A reshape item 1 (F1): one compact line reporting the settle-retry ladder
+// outcome (recovered / attempted-and-failed); the structured trace lives in details.recoveredBy.
+function formatSettleRetryText(options) {
+    return typeof options.settleRetryNote === "string" && options.settleRetryNote.length > 0 ? options.settleRetryNote : undefined;
 }
 function formatNetworkBodyText(result) {
     if (!result || typeof result !== "object") {
@@ -509,6 +514,8 @@ function buildAgentBrowserResultDetails(options, nextActions) {
         navigationSummary: options.navigationSummary,
         electron: options.electronLaunchRecord ? { action: "launch", cleanup: options.electronFailedConnectCleanup, handoff: options.electronHandoff, identifiers: buildElectronIdentifiers(options.electronLaunchRecord), launch: options.electronLaunchRecord, profileIsolation: options.electronProfileIsolationDetails, status: options.succeeded ? "succeeded" : "failed", targets: options.electronLaunch?.targets, version: options.electronLaunch?.version } : undefined,
         ...options.categoryDetails,
+        recoveredBy: options.recoveredBy,
+        settleRetryOutcome: options.settleRetryOutcome,
         agentBrowserStarted: options.processResult.agentBrowserStarted,
         browserWindow,
         lifecycle,
@@ -614,7 +621,7 @@ export function buildFinalAgentBrowserToolResult(options) {
     const readExecutionText = formatReadExecutionText(options, lifecycle);
     const browserWindowText = formatBrowserWindowText(browserWindow);
     const failureNextActionsText = formatFailureNextActionsText(options, nextActions);
-    const rawAppendedDiagnosticText = [formatDebugReportText(options.debugReport), formatSettleReportText(options.settleReport), formatNetworkBodyText(options.networkBody), visibleRefFallbackText, richInputRecoveryText, semanticActionCandidateText, clickDispatchText, overlayBlockerText, fillVerificationText, electronRefFreshnessText, selectorTextVisibilityText, electronBroadGetTextScopeText, scrollNoopDiagnosticText, comboboxFocusDiagnosticText, recordingDependencyWarningText, geolocationStubNoteText, evalStdinHintText, evalResultWarningText, artifactCleanupText, timeoutPartialProgressText, managedSessionOutcomeText, readExecutionText, browserWindowText, failureNextActionsText].filter((item) => item !== undefined).join("\n\n");
+    const rawAppendedDiagnosticText = [formatDebugReportText(options.debugReport), formatSettleReportText(options.settleReport), formatSettleRetryText(options), formatNetworkBodyText(options.networkBody), visibleRefFallbackText, richInputRecoveryText, semanticActionCandidateText, clickDispatchText, overlayBlockerText, fillVerificationText, electronRefFreshnessText, selectorTextVisibilityText, electronBroadGetTextScopeText, scrollNoopDiagnosticText, comboboxFocusDiagnosticText, recordingDependencyWarningText, geolocationStubNoteText, evalStdinHintText, evalResultWarningText, artifactCleanupText, timeoutPartialProgressText, managedSessionOutcomeText, readExecutionText, browserWindowText, failureNextActionsText].filter((item) => item !== undefined).join("\n\n");
     const appendedDiagnosticText = redactSensitiveText(redactExactSensitiveText(rawAppendedDiagnosticText, options.exactSensitiveValues));
     // local patch: verbosity gates diagnostic prose only, never structure (PATCHES.md P14).
     const shouldAppendDiagnosticText = appendedDiagnosticText.length > 0 && shouldAppendDiagnosticBlocks(options.verbosity) && (!options.userRequestedJson || options.plainTextInspection);

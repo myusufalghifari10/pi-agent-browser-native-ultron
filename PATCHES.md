@@ -305,7 +305,10 @@ the guide is read. Three changes here, all marked `local patch` in `dist/extensi
 names only, `additionalProperties: true`; real validation stays in `resolveAgentBrowserInput` and
 CLI errors. (2) Tool description is a one-liner + input-mode list + guide path
 (`docs/COMMAND_REFERENCE.md`). (3) `toolPromptGuidelines` keeps only config-driven lines
-(`agent_browser config sets…`) plus three slim lines (opt-in policy, secrets policy, guide path).
+(`agent_browser config sets…`) plus a slim always-on canonical block: 5 invariants (always-on tool
+use, secrets via vault/login, verify mutations, explicit user stop boundaries, follow
+`details.nextActions`) + the 4-gate map (LIHAT/LAKUKAN/KELOLA/OTOMASI) + the docs guide-gate
+pointer, joined ≤900 chars (guard: `tests-v2/wave1-d-prompt-length.mjs`).
 Effect: agent_browser payload dropped from ~4,788 to ~243 tokens (o200k estimate). Upgrade will
 clobber this file — reapply or restore from this note.
 
@@ -360,3 +363,16 @@ Implementation notes:
   (e.g. `stdin` for `eval --stdin`, non-JSON `args` text) pass through untouched.
 - `script` mode was unaffected (string param) and continues to work.
 - A restart is required before the patch is live (Pi keeps the compiled module it loaded at startup).
+
+## Round 4: Patch Integrity Ledger (PL1)
+
+The 28 hand-applied patches had no structural guard: an update or re-install could silently clobber them and the wrapper would keep spawning. FINAL-DESIGN.md §5 step 1 closes that hole with a checksum ledger verified before every spawn.
+
+| # | What | Why | Files |
+| --- | --- | --- | --- |
+| PL1 | `patches/patches.manifest.json` pins sha256 of every divergent file (the 11 code files from the divergence table + `index.js`, plus the ledger itself); `verifyPatchLedger()` checks once per process and caches the verdict; `runAgentBrowserProcess` refuses to spawn naming each drifted/missing file | Drift must be detectable structurally, not by mysterious downstream failures — drift = hard refusal, "No silent fallback"; a missing manifest is tolerated (fresh install) | `patches/patches.manifest.json` (new), `lib/patches-ledger.js` (new), `…/process.js` (pre-spawn hook), `scripts/verify-patches.mjs` (offline CLI) |
+| PL2 | Prompt-slim v2: always-on Tier A block in `lib/playbook.js` (`RUNTIME_PROMPT_GUIDELINES` — 5 invariants incl. explicit user stop boundaries + 4-gate map + guide-gate pointer, ≤900 chars, guarded by `tests-v2/wave1-d-prompt-length.mjs`); tool `description`/`promptSnippet` switched opt-in → always-on; dead `buildInstalledDocsGuideline`/`TOOL_PROMPT_GUIDELINES_SUFFIX` exports removed | Opt-in wording contradicted the always-on policy; the removed stop-boundary line was safety-bearing | `dist/extensions/agent-browser/lib/playbook.js`, `dist/extensions/agent-browser/index.js` |
+
+PL1-fix: settle-retry excludes batch (double-dispatch), adds settleRetryOutcome detail + retry timeout clamp (review round 1)
+
+After any package update: `node scripts/verify-patches.mjs` must print all-OK (exit 0) before restarting Pi. On DRIFT/MISSING, re-apply the patches above, then re-pin the hashes from the verified tree.

@@ -1,0 +1,170 @@
+{
+  "version": 1,
+  "algorithm": "sha256",
+  "description": "Patch Integrity Ledger: sha256 of every file that intentionally diverges from pristine pi-agent-browser-native 0.6.13 (see PATCHES.md). Drift is a hard pre-spawn refusal \u2014 re-apply per PATCHES.md, no silent fallback. Re-pin hashes only from a verified tree after re-applying patches. There is no P4 (see PATCHES.md).",
+  "entries": [
+    {
+      "id": "P2",
+      "patches": [
+        "P2"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/launch-scoped-flags.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/launch-scoped-flags.js": "455bf0f9995573aca8669b2fdef24532b5f61fbaa8deb9455fca82175ca0366d"
+      },
+      "upstreamDefect": "Launch-scoped flags were only guarded for managed sessions and 11 flags went unrecognized (LAUNCH_SCOPED_FLAGS 26 \u2192 37)."
+    },
+    {
+      "id": "P5",
+      "patches": [
+        "P5",
+        "P6",
+        "P8"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "3caa0f24859dc4397b1a45489ae4dfc449f6bb0888f5b93007a5178f9718f53d"
+      },
+      "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
+    },
+    {
+      "id": "P8",
+      "patches": [
+        "P8"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "9bacc4f3ad499cc199ecba9b841ef9bec2846ff22807ca72c17ef75849b5efc4"
+      },
+      "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding \u2192 Missing 'path' parameter; path-like operand \u2192 Invalid session name)."
+    },
+    {
+      "id": "P9-output",
+      "patches": [
+        "P9"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "c441b141c60a8a8994d0b89e54e4a92ed33f29b94ef3e9ef2b31687dd4d7d4be"
+      },
+      "upstreamDefect": "set geo <lat> <lon> succeeded but never granted the geolocation permission, so pages always got User denied Geolocation (wrapper stub-install half)."
+    },
+    {
+      "id": "P9-result",
+      "patches": [
+        "P9"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js": "4a104c30c209f61b30d8bd08d831a257e4354737f7391fe9faa0c333821e1c3c"
+      },
+      "upstreamDefect": "set geo emulation stayed invisible to the caller without a result note carrying the --init-script + sessionMode recipe (note half of P9)."
+    },
+    {
+      "id": "P9-stub",
+      "patches": [
+        "P9"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/geolocation-stub.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/geolocation-stub.js": "1592e348f80ff68bb757de6fbe663fe10488f606c88a543bd92fb9d138b27a2f"
+      },
+      "upstreamDefect": "set geo never granted the geolocation permission; this new module installs the page-level navigator.geolocation stub (getCurrentPosition/watchPosition/clearWatch, permissions.query \u2192 granted)."
+    },
+    {
+      "id": "P2b",
+      "patches": [
+        "P2b"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/native-session-defaults.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/native-session-defaults.js": "0da63be42e22ec1f1dd40252dbd1fd4c78f2710ec67ec9bd230903656e7021fe"
+      },
+      "upstreamDefect": "Root sessions (pi-root-*) accepted mid-session launch-scoped flags that upstream silently ignores."
+    },
+    {
+      "id": "P1",
+      "patches": [
+        "P1",
+        "P7",
+        "P10"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/results/presentation/diagnostics.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/results/presentation/diagnostics.js": "de09694b4f522eaf9482a9e09e58be3991763afca4b05c6cad4c6b81180f7048"
+      },
+      "upstreamDefect": "storage local get <missing-key> rendered a redacted [REDACTED] for a nonexistent value (P1); errors --clear reported success while the rows survived (P7); cookies get silently ignored --url so an empty list read as proof of no cookies (P10)."
+    },
+    {
+      "id": "P3-batch",
+      "patches": [
+        "P3"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/results/presentation/batch.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/results/presentation/batch.js": "0d431e0128d8d9969e4f52df77f699fed0ac9c71f585f209a62a6b297981cd2e"
+      },
+      "upstreamDefect": "Batch snapshot --search/--filter steps were presented unfiltered, contradicting the same command run directly."
+    },
+    {
+      "id": "P3-filter",
+      "patches": [
+        "P3"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/results/presentation/snapshot-step-filter.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/results/presentation/snapshot-step-filter.js": "dcfcbf3dc5f2fde3e295caba59e862e5445d77b17bbe09d28e060a9e85da022a"
+      },
+      "upstreamDefect": "Batch snapshot --search/--filter steps presented unfiltered results; this new module applies the requested filter in presentation."
+    },
+    {
+      "id": "IDX-P28",
+      "patches": [
+        "P28",
+        "R2-token-slim"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/index.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/index.js": "927443dce4a6cbd365a4ff143b6aa9f17c5be0ff3b2f29126860cfa986915884"
+      },
+      "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage \u2014 current shape maintained in playbook.js, see PATCHES.md)."
+    },
+    {
+      "id": "PL1",
+      "patches": [
+        "PL1"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/patches-ledger.js",
+        "dist/extensions/agent-browser/lib/process.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/patches-ledger.js": "c1e09afe44ed9ec41bd5cef7f09591df2f3f7bee0b00e352515e6007bd86475c",
+        "dist/extensions/agent-browser/lib/process.js": "c2cd79539893f701cd462e136c97c2abb02b5303c15134c4fc440ad1c817667d"
+      },
+      "upstreamDefect": "No structural guard existed against local-patch clobbering: an update could overwrite the 28 hand-applied patches and the wrapper would keep spawning silently (pre-spawn verifyPatchLedger gate)."
+    }
+  ]
+}

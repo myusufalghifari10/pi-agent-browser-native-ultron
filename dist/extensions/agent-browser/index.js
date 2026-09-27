@@ -793,20 +793,15 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         cwd: process.cwd(),
         includeProjectConfig: false,
     });
-    const webSearchToolAvailable = canRegisterWebSearchTool(agentBrowserConfig);
-    // local patch: slim guidelines — full playbook moved to docs; keep only config-driven lines + 3 slim lines
-    const fullToolPromptGuidelines = buildToolPromptGuidelines({
+    // local patch: slim promptGuidelines — canonical Tier A built by buildToolPromptGuidelines (lib/playbook.js):
+    // 4 invariants + gate map + docs/COMMAND_REFERENCE.md guide-gate pointer, plus config-driven
+    // lines ("agent_browser config sets …") when configured. Everything else is failure-driven
+    // teaching via details.nextActions or guide-gate docs.
+    const toolPromptGuidelines = buildToolPromptGuidelines({
         browserDefaultProfile: agentBrowserConfig.trustedBrowserDefaultProfile,
         browserExecutablePath: agentBrowserConfig.trustedBrowserExecutablePath,
-        includeWebSearch: webSearchToolAvailable,
         docs: getInstalledDocsPaths(),
     });
-    const toolPromptGuidelines = [
-        ...fullToolPromptGuidelines.filter((line) => line.startsWith("agent_browser config sets")),
-        "OPT-IN only: use agent_browser solely when Yusuf explicitly asks for browser automation (click, scroll, screenshot, page JS) in the current request; default path = web_search + web_scrape.",
-        "Secrets: never type passwords/card numbers/2FA into pages; use vault or login. Verify artifacts before claiming success.",
-        "Full guide (read before first use in a session): /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
-    ];
     const implicitSessionIdleTimeoutMs = String(getImplicitSessionIdleTimeoutMs());
     const implicitSessionCloseTimeoutMs = getImplicitSessionCloseTimeoutMs();
     let webSearchToolRegistered = false;
@@ -1367,8 +1362,8 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
     const agentBrowserTool = {
         name: "agent_browser",
         label: "Agent Browser",
-        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. OPT-IN only: use when the user explicitly asks for browser actions. Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
-        promptSnippet: "Browser automation: open/click/fill/scrape live pages; opt-in only, guide in docs/COMMAND_REFERENCE.md.",
+        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
+        promptSnippet: "Browser automation: open/click/fill/scrape live pages; use for ALL browser work, guide in docs/COMMAND_REFERENCE.md.",
         promptGuidelines: toolPromptGuidelines,
         // local patch P28: some model providers/harnesses deliver array/object tool params as JSON strings
         // (pi core's own edit tool compensates for exactly this via prepareEditArguments). Without this,

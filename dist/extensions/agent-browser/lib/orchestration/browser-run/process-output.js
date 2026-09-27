@@ -8,6 +8,8 @@ import { OPEN_RESULT_TAB_CORRECTION_FLAGS } from "../../launch-scoped-flags.js";
 import { cleanupElectronLaunchResources, inspectElectronLaunchStatus } from "../../electron/cleanup.js";
 import { getResultingPageTargetState, commandRequiresLivePageVerification } from "../../page-target-validation.js";
 import { analyzeNetworkSourceLookupResults, analyzeSourceLookupResults, redactNetworkSourceLookupAnalysis } from "../../input-modes/lookups.js";
+import { isAgentBrowserScriptSessionName } from "../../input-modes/script.js";
+import { runAgentBrowserProcess, withChromeStartupArgs } from "../../process.js";
 import { analyzeQaPresetResults, analyzeQaPresetTimeout, buildQaCompactFailureText, buildQaCompactPassText, extractQaPageContext } from "../../input-modes/job.js";
 import { applyNetworkRouteRecords, buildNetworkRouteDiagnostics } from "../../results/network-routes.js";
 import { buildToolPresentation } from "../../results/presentation.js";
@@ -37,6 +39,7 @@ import { repairScreenshotData } from "./prepare.js";
 import { mergeRecordingRecoveryPresentation, recoverRecordingStop } from "./recording-recovery.js";
 import { getPersistentSessionArtifactStore } from "./session-state.js";
 import { buildFinalAgentBrowserToolResult, buildRedactedPresentationContent, buildWrapperRecoveryHint, prepareFinalResultRecoveryState, redactExactSensitiveValue, } from "./final-result.js";
+import { computeRetryTimeoutMs, hasSettleRetryTimeBudget, SETTLE_RETRY_DELAY_MS, shouldRetrySettle } from "./settle-retry.js";
 import { createDiagnosticsBufferState, describeDiagnosticsBuffer, partitionDiagnosticRows } from "../../session-diagnostics-buffer.js";
 // local patch: reliable "since my last read" windows for console/errors/network reads (PATCHES.md P24).
 // Upstream's `--clear` does not actually purge its buffers, so the wrapper remembers which rows it already
@@ -912,6 +915,44 @@ export async function processBrowserOutput(input) {
         const authoritativePageState = sessionStateKey ? sessionPageState.get(sessionStateKey) : undefined;
         if (sessionStateKey)
             currentSessionTabTarget = authoritativePageState?.tabTarget;
+        // FINAL-DESIGN.md pillar A reshape item 1 (F1): auto-settle-retry ladder ①. For failure classes
+        // that provably dispatched nothing (stale-ref, selector-not-found), wait 300ms and re-execute the
+        // identical prepared process args once — no model round-trip. The re-run re-enters this same
+        // pipeline with settleRetry.attempted set, which caps the ladder at a single retry; on retry
+        // failure the fresher retried result is returned with a one-line note.
+        const settleRetryOutcome = input.settleRetry?.attempted === true ? { attempted: true, recovered: succeeded === true } : undefined;
+        const settleRetryElapsedMs = Math.max(0, Date.now() - input.artifactRunStartedAtMs);
+        const settleRetryEligible = settleRetryOutcome === undefined
+            && succeeded !== true
+            && signal?.aborted !== true
+            && !isAgentBrowserScriptSessionName(prepared.executionPlan.sessionName)
+            // Review round 1 (batch double-dispatch): a batch presentation's run-level failureCategory
+            // is the failed STEP's category, so shouldRetrySettle alone cannot prove nothing dispatched
+            // — refuse any presentation carrying batchFailure, whatever its shape.
+            && presentation.batchFailure == null
+            && shouldRetrySettle({ commandInfo: prepared.executionPlan.commandInfo, failureCategory: finalRecoveryState.categoryDetails.failureCategory })
+            && hasSettleRetryTimeBudget({ startedAtMs: input.artifactRunStartedAtMs, timeoutMs: prepared.processTimeoutMs });
+        if (settleRetryEligible) {
+            await sleepMs(SETTLE_RETRY_DELAY_MS);
+            if (signal?.aborted !== true) {
+                const settleRetryProcessResult = await withChromeStartupArgs(prepared.chromeStartupArgs, () => runAgentBrowserProcess({
+                    args: prepared.processArgs,
+                    browserIndependentReadConfirmation: prepared.readConfirmation !== undefined,
+                    cwd,
+                    env: prepared.ownedManagedSessionContext ? { AGENT_BROWSER_IDLE_TIMEOUT_MS: input.implicitSessionIdleTimeoutMs } : undefined,
+                    managedSessionRestoreState: state.managedSessionRestoreState,
+                    managedStateCurrentPageUrl: prepared.priorSessionTabTarget?.url,
+                    managedStatePageUrlUnknown: prepared.priorSessionTabTargetUnknown === true,
+                    ownedManagedSession: prepared.ownedManagedSessionContext !== undefined,
+                    signal,
+                    stdin: prepared.processStdin,
+                    // Review round 1 (budget floor-not-cap): the retried run gets the remaining wall
+                    // clock minus the settle delay, never the full prepared timeout again.
+                    timeoutMs: computeRetryTimeoutMs({ timeoutMs: prepared.processTimeoutMs, elapsedMs: settleRetryElapsedMs, delayMs: SETTLE_RETRY_DELAY_MS }),
+                }));
+                return await processBrowserOutput({ ...input, processResult: settleRetryProcessResult, settleRetry: { attempted: true } });
+            }
+        }
         // local patch: analyze the new modes' payloads for their `details.*Report` fields (PATCHES.md P16-P19).
         const debugReport = prepared.compiledDebug ? analyzeDebugPresetResults(presentation?.batchSteps ?? [], prepared.compiledDebug).report : undefined;
         const settleReport = prepared.compiledSettle ? analyzeSettleResult(presentation?.data) : undefined;
@@ -930,7 +971,7 @@ export async function processBrowserOutput(input) {
         const resultHeadedManagedAutosaveInterval = resultRetainsPreparedManagedSession && !prepared.ownedManagedSessionContext?.reuseOnly && !(commandClosesSession && succeeded)
             ? prepared.ownedManagedSessionContext?.headedManagedAutosaveInterval
             : undefined;
-        const result = buildFinalAgentBrowserToolResult({ aboutBlankSessionMismatch, artifactCleanup, categoryDetails: finalRecoveryState.categoryDetails, clickDispatchDiagnostic, commandTokens: prepared.commandTokens, comboboxFocusDiagnostic, compiledDebug: prepared.compiledDebug, compiledLogin: prepared.compiledLogin, compiledNetworkBody: prepared.compiledNetworkBody, compiledNetworkSourceLookup: prepared.compiledNetworkSourceLookup, compiledScript: prepared.compiledScript, compiledSemanticAction: prepared.compiledSemanticAction, compiledSettle: prepared.compiledSettle, compiledVault: prepared.compiledVault, compatibilityWorkaround: prepared.compatibilityWorkaround, currentRefSnapshot, currentRefSnapshotInvalidation, currentSessionTabTarget, currentSessionTabTargetUnknown, debugReport, electronBroadGetTextScopeDiagnostics, electronFailedConnectCleanup, electronHandoff, electronLaunch: prepared.electronLaunch, electronLaunchRecord, electronLaunchRecords, electronPostCommandHealth, electronProfileIsolationDetails: input.electronProfileIsolationDetails, electronRefFreshnessDiagnostic, electronSessionMismatch, errorText, evalResultWarning, evalStdinHint, exactSensitiveValues: prepared.exactSensitiveValues, executionPlan: prepared.executionPlan, fillVerificationDiagnostic, geolocationStubNote, headedLaunch: prepared.headedLaunch, inspectionText, preserveAttachedBrowserSession: input.preserveAttachedBrowserSession === true, providerLaunch: prepared.providerLaunch, managedSessionHeadedAutosaveDisabled: resultHeadedManagedAutosaveDisabled || undefined, managedSessionHeadedAutosaveInterval: resultHeadedManagedAutosaveInterval, managedSessionOutcome, managedSessionRestoreDisabled: state.managedSessionRestoreState.isDisabled(prepared.executionPlan.sessionName, prepared.executionPlan.namespace), navigationSummary, networkBody: networkBodyResult, networkSourceLookup, noActivePageSnapshotFailure: finalRecoveryState.noActivePageSnapshotFailure, openResultTabCorrection, overlayBlockerDiagnostic, parseError, parseFailureOutput, parseSucceeded, plainTextInspection, presentation, presentationEnvelope, priorSessionTabTarget: prepared.priorSessionTabTarget, processResult, qaAttachedTarget, qaPreset, recordingDependencyWarning, redactedArgs: prepared.redactedArgs, redactedCompiledElectron: prepared.redactedCompiledElectron, redactedCompiledJob: prepared.redactedCompiledJob, redactedCompiledNetworkSourceLookup: prepared.redactedCompiledNetworkSourceLookup, redactedCompiledQaPreset: prepared.redactedCompiledQaPreset, redactedCompiledSemanticAction: prepared.redactedCompiledSemanticAction, redactedCompiledSourceLookup: prepared.redactedCompiledSourceLookup, redactedContent, redactedProcessArgs: prepared.redactedProcessArgs, redactedRecoveryHint: prepared.redactedRecoveryHint, resultArtifactManifest, revealSecrets: prepared.revealSecrets, revealSecretsMatchedRows, revealedHeaderLines, richInputRecoveryDiagnostic: finalRecoveryState.richInputRecoveryDiagnostic, scrollNoopDiagnostic, selectorTextVisibilityDiagnostics, sessionMode: prepared.sessionMode, sessionTabCorrection, settleReport, sourceLookup, succeeded, timeoutPartialProgress, unsettledWebMcpMutation, userRequestedJson: prepared.userRequestedJson, verbosity: prepared.verbosity, visibleRefFallbackDiagnostic: finalRecoveryState.visibleRefFallbackDiagnostic, visibleRefFallbackSessionName: finalRecoveryState.visibleRefFallbackSessionName });
+        const result = buildFinalAgentBrowserToolResult({ aboutBlankSessionMismatch, artifactCleanup, categoryDetails: finalRecoveryState.categoryDetails, clickDispatchDiagnostic, commandTokens: prepared.commandTokens, comboboxFocusDiagnostic, compiledDebug: prepared.compiledDebug, compiledLogin: prepared.compiledLogin, compiledNetworkBody: prepared.compiledNetworkBody, compiledNetworkSourceLookup: prepared.compiledNetworkSourceLookup, compiledScript: prepared.compiledScript, compiledSemanticAction: prepared.compiledSemanticAction, compiledSettle: prepared.compiledSettle, compiledVault: prepared.compiledVault, compatibilityWorkaround: prepared.compatibilityWorkaround, currentRefSnapshot, currentRefSnapshotInvalidation, currentSessionTabTarget, currentSessionTabTargetUnknown, debugReport, electronBroadGetTextScopeDiagnostics, electronFailedConnectCleanup, electronHandoff, electronLaunch: prepared.electronLaunch, electronLaunchRecord, electronLaunchRecords, electronPostCommandHealth, electronProfileIsolationDetails: input.electronProfileIsolationDetails, electronRefFreshnessDiagnostic, electronSessionMismatch, errorText, evalResultWarning, evalStdinHint, exactSensitiveValues: prepared.exactSensitiveValues, executionPlan: prepared.executionPlan, fillVerificationDiagnostic, geolocationStubNote, headedLaunch: prepared.headedLaunch, inspectionText, preserveAttachedBrowserSession: input.preserveAttachedBrowserSession === true, providerLaunch: prepared.providerLaunch, managedSessionHeadedAutosaveDisabled: resultHeadedManagedAutosaveDisabled || undefined, managedSessionHeadedAutosaveInterval: resultHeadedManagedAutosaveInterval, managedSessionOutcome, managedSessionRestoreDisabled: state.managedSessionRestoreState.isDisabled(prepared.executionPlan.sessionName, prepared.executionPlan.namespace), navigationSummary, networkBody: networkBodyResult, networkSourceLookup, noActivePageSnapshotFailure: finalRecoveryState.noActivePageSnapshotFailure, openResultTabCorrection, overlayBlockerDiagnostic, parseError, parseFailureOutput, parseSucceeded, plainTextInspection, presentation, presentationEnvelope, priorSessionTabTarget: prepared.priorSessionTabTarget, processResult, qaAttachedTarget, qaPreset, recoveredBy: settleRetryOutcome?.recovered === true ? "settle-retry" : undefined, settleRetryOutcome: settleRetryOutcome === undefined ? undefined : settleRetryOutcome.recovered ? "recovered" : "attempted-failed", recordingDependencyWarning, redactedArgs: prepared.redactedArgs, redactedCompiledElectron: prepared.redactedCompiledElectron, redactedCompiledJob: prepared.redactedCompiledJob, redactedCompiledNetworkSourceLookup: prepared.redactedCompiledNetworkSourceLookup, redactedCompiledQaPreset: prepared.redactedCompiledQaPreset, redactedCompiledSemanticAction: prepared.redactedCompiledSemanticAction, redactedCompiledSourceLookup: prepared.redactedCompiledSourceLookup, redactedContent, redactedProcessArgs: prepared.redactedProcessArgs, redactedRecoveryHint: prepared.redactedRecoveryHint, resultArtifactManifest, revealSecrets: prepared.revealSecrets, revealSecretsMatchedRows, revealedHeaderLines, richInputRecoveryDiagnostic: finalRecoveryState.richInputRecoveryDiagnostic, scrollNoopDiagnostic, selectorTextVisibilityDiagnostics, sessionMode: prepared.sessionMode, sessionTabCorrection, settleReport, settleRetryNote: settleRetryOutcome === undefined ? undefined : settleRetryOutcome.recovered ? "Recovered by settle-retry (1 automatic retry after 300ms)" : "Settle-retry attempted and failed; the fresher retried failure is returned.", sourceLookup, succeeded, timeoutPartialProgress, unsettledWebMcpMutation, userRequestedJson: prepared.userRequestedJson, verbosity: prepared.verbosity, visibleRefFallbackDiagnostic: finalRecoveryState.visibleRefFallbackDiagnostic, visibleRefFallbackSessionName: finalRecoveryState.visibleRefFallbackSessionName });
         const resultWithCloseAll = closeAllApplied
             ? { ...result, details: { ...(isRecord(result.details) ? result.details : {}), closeAllApplied: true } }
             : result;
