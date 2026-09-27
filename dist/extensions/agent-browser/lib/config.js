@@ -1,0 +1,102 @@
+import { exec as execCallback } from "node:child_process";
+import { readFile } from "node:fs/promises";
+import { promisify } from "node:util";
+import { SECRET_COMMAND_TIMEOUT_MS, buildAgentBrowserConfigState, getAgentBrowserConfigPaths, getWebSearchCredentialSource, getWebSearchProviderOrder, loadAgentBrowserConfigStateSync, mergeAgentBrowserConfig, parseAgentBrowserConfigLayer, resolveEnvInterpolations, } from "./config-policy.js";
+export { AGENT_BROWSER_CONFIG_ENV, BRAVE_API_KEY_ENV, CONFIG_RELATIVE_PATH, DEFAULT_WEB_SEARCH_PROVIDER, EXA_API_KEY_ENV, EXA_SEARCH_TYPES, GLOBAL_CONFIG_RELATIVE_PATH, SECRET_COMMAND_TIMEOUT_MS, WEB_SEARCH_PROVIDER_CONFIG_KEYS, WEB_SEARCH_PROVIDER_DESCRIPTORS, WEB_SEARCH_PROVIDER_ENV_VARS, WEB_SEARCH_PROVIDERS, buildAgentBrowserConfigState, buildWebSearchCredentialSources, canRegisterWebSearchTool, classifyCredentialSource, formatBrowserExecutableStatus, formatBrowserProfileStatus, getAgentBrowserConfigPaths, getCredentialSourceSummary, getGlobalAgentBrowserConfigPath, getProjectAgentBrowserConfigPath, getWebSearchCredentialSource, getWebSearchProviderConfigKey, getWebSearchProviderDescriptor, getWebSearchProviderEnvVar, getWebSearchProviderLabel, getWebSearchProviderOrder, hasPotentialCredentialSource, isPlaintextCredentialValue, isProjectSafeCredentialValueForProvider, isWebSearchProvider, loadAgentBrowserConfigStateSync, mergeAgentBrowserConfig, parseAgentBrowserConfigLayer, resolveEnvInterpolations, summarizeConfigFiles, validateAgentBrowserConfig, validateWebSearchProvider, } from "./config-policy.js";
+const exec = promisify(execCallback);
+async function readConfigLayer(path, scope, errors, warnings) {
+    let raw;
+    try {
+        raw = await readFile(path, "utf8");
+    }
+    catch (error) {
+        if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+            return undefined;
+        }
+        errors.push(`Could not read ${scope} config ${path}: ${error instanceof Error ? error.message : String(error)}`);
+        return undefined;
+    }
+    return parseAgentBrowserConfigLayer(raw, path, scope, errors, warnings);
+}
+export async function loadAgentBrowserConfig(options = {}) {
+    const env = options.env ?? process.env;
+    const paths = getAgentBrowserConfigPaths({ cwd: options.cwd, env });
+    const includeProjectConfig = options.includeProjectConfig !== false;
+    const errors = [];
+    const warnings = [];
+    const layerCandidates = [
+        { path: paths.global, scope: "global" },
+        ...(includeProjectConfig ? [{ path: paths.project, scope: "project" }] : []),
+        ...(paths.override ? [{ path: paths.override, scope: "override" }] : []),
+    ];
+    const layers = [];
+    let mergedConfig = {};
+    for (const candidate of layerCandidates) {
+        const layer = await readConfigLayer(candidate.path, candidate.scope, errors, warnings);
+        if (!layer)
+            continue;
+        layers.push(layer);
+        mergedConfig = mergeAgentBrowserConfig(mergedConfig, layer.config);
+    }
+    return buildAgentBrowserConfigState({
+        env,
+        errors,
+        layers,
+        mergedConfig,
+        paths,
+        projectConfigIncluded: includeProjectConfig,
+        warnings,
+    });
+}
+export function loadAgentBrowserConfigSync(options = {}) {
+    return loadAgentBrowserConfigStateSync(options);
+}
+async function resolveCommandCredential(rawValue, signal) {
+    const command = rawValue.slice(1).trim();
+    if (!command)
+        return undefined;
+    try {
+        const result = await exec(command, {
+            signal,
+            timeout: SECRET_COMMAND_TIMEOUT_MS,
+            maxBuffer: 1024 * 1024,
+        });
+        const value = result.stdout.trim();
+        return value.length > 0 ? value : undefined;
+    }
+    catch (error) {
+        if (signal?.aborted)
+            throw error;
+        throw new Error("Credential command failed without exposing command output. Check pi-agent-browser-config web-search status and the configured secret manager command.");
+    }
+}
+export async function resolveCredentialSource(source, options = {}) {
+    if (!source)
+        return undefined;
+    let value;
+    if (source.kind === "command") {
+        value = await resolveCommandCredential(source.rawValue, options.signal);
+    }
+    else if (source.kind === "env") {
+        value = resolveEnvInterpolations(source.rawValue, options.env ?? process.env)?.trim();
+    }
+    else {
+        value = source.rawValue.trim();
+    }
+    return value ? { source, value } : undefined;
+}
+export async function resolveWebSearchCredential(state, provider, options = {}) {
+    if (!state.webSearchEnabled || state.errors.length > 0)
+        return undefined;
+    return resolveCredentialSource(getWebSearchCredentialSource(state, provider), options);
+}
+export async function resolvePreferredWebSearchCredential(state, options = {}) {
+    if (!state.webSearchEnabled || state.errors.length > 0)
+        return undefined;
+    for (const provider of getWebSearchProviderOrder(state, options.provider)) {
+        const credential = await resolveWebSearchCredential(state, provider, options);
+        if (credential)
+            return { provider, credential };
+    }
+    return undefined;
+}

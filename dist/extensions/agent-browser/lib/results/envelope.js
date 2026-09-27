@@ -1,0 +1,171 @@
+import { readFile } from "node:fs/promises";
+import { isRecord } from "../parsing.js";
+import { detectConfirmationRequired } from "./confirmation.js";
+import { stringifyUnknown } from "./text.js";
+function hasStructuredBatchStepFailure(data) {
+    return Array.isArray(data) && data.some((item) => isRecord(item) && item.success === false);
+}
+async function readEnvelopeSource(options) {
+    if (!options.stdoutPath) {
+        return options.stdout;
+    }
+    try {
+        return await readFile(options.stdoutPath, "utf8");
+    }
+    catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`agent-browser output spill file could not be read: ${message}`);
+    }
+}
+export function extractEnvelopeErrorText(error) {
+    if (typeof error === "string") {
+        return error.trim() || undefined;
+    }
+    if (typeof error === "number" || typeof error === "boolean") {
+        return String(error);
+    }
+    if (Array.isArray(error)) {
+        const parts = error.map((item) => extractEnvelopeErrorText(item) ?? stringifyUnknown(item)).filter((item) => item.length > 0);
+        return parts.length > 0 ? parts.join("\n") : undefined;
+    }
+    if (!isRecord(error)) {
+        return error == null ? undefined : stringifyUnknown(error);
+    }
+    for (const key of ["message", "error", "details", "cause", "stderr"]) {
+        const value = extractEnvelopeErrorText(error[key]);
+        if (value)
+            return value;
+    }
+    const fallback = stringifyUnknown(error).trim();
+    return fallback.length > 0 && fallback !== "{}" ? fallback : undefined;
+}
+export async function parseAgentBrowserEnvelope(options) {
+    let stdout;
+    try {
+        stdout = typeof options === "string" ? options : await readEnvelopeSource(options);
+    }
+    catch (error) {
+        return { parseError: error instanceof Error ? error.message : String(error) };
+    }
+    const trimmed = stdout.trim();
+    const plainText = typeof options !== "string" && options.plainText === true;
+    if (trimmed.length === 0 && !plainText) {
+        return { parseError: "agent-browser returned no JSON output." };
+    }
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (Array.isArray(parsed)) {
+            return { envelope: { success: parsed.every((item) => !isRecord(item) || item.success !== false), data: parsed } };
+        }
+        if (!isRecord(parsed)) {
+            return { parseError: "agent-browser returned JSON, but it was not an object envelope." };
+        }
+        const keys = Object.keys(parsed);
+        if (keys.length === 1 && keys[0] === "plugins" && Array.isArray(parsed.plugins)) {
+            return { envelope: { success: true, data: { plugins: parsed.plugins } } };
+        }
+        if (keys.length === 1 && keys[0] === "plugin" && isRecord(parsed.plugin) && !Array.isArray(parsed.plugin)) {
+            return { envelope: { success: true, data: { plugin: parsed.plugin } } };
+        }
+        if (!("success" in parsed)) {
+            return { parseError: "agent-browser returned an invalid JSON envelope: missing boolean success field." };
+        }
+        if (typeof parsed.success !== "boolean") {
+            return { parseError: "agent-browser returned an invalid JSON envelope: success field must be boolean." };
+        }
+        if (!Object.hasOwn(parsed, "data")) {
+            const { success, error, ...topLevelData } = parsed;
+            if (Object.keys(topLevelData).length > 0) {
+                return { envelope: { error, success, data: topLevelData } };
+            }
+        }
+        return { envelope: parsed };
+    }
+    catch (error) {
+        if (plainText)
+            return { envelope: { success: true, data: trimmed } };
+        const message = error instanceof Error ? error.message : String(error);
+        return { parseError: `agent-browser returned invalid JSON: ${message}` };
+    }
+}
+function buildInvocationLabel(options) {
+    if (options.effectiveArgs && options.effectiveArgs.length > 0) {
+        return `agent-browser ${options.effectiveArgs.join(" ")}`;
+    }
+    if (options.command && options.command.trim().length > 0) {
+        return `agent-browser ${options.command.trim()}`;
+    }
+    return "agent-browser";
+}
+function appendWrapperRecoveryHint(message, wrapperRecoveryHint) {
+    const hint = wrapperRecoveryHint?.trim();
+    return hint ? `${message}\n${hint}` : message;
+}
+function buildFailureFallback(options) {
+    const invocation = buildInvocationLabel(options);
+    const exitSuffix = options.exitCode !== 0 ? ` (exit code ${options.exitCode})` : "";
+    return appendWrapperRecoveryHint(`${invocation} reported failure${exitSuffix}.`, options.wrapperRecoveryHint);
+}
+function buildExitCodeFallback(options) {
+    const invocation = buildInvocationLabel(options);
+    return appendWrapperRecoveryHint(`${invocation} exited with code ${options.exitCode}.`, options.wrapperRecoveryHint);
+}
+function buildWatchdogTimeoutMessage(options) {
+    const timeoutText = options.timeoutMs === undefined ? "the wrapper watchdog" : `the ${options.timeoutMs}ms wrapper watchdog`;
+    const ipcTiming = options.timeoutMs !== undefined && options.timeoutMs <= 30_000
+        ? "before the upstream CLI entered its 30s IPC retry path"
+        : "after waiting beyond the upstream CLI's 30s IPC retry window";
+    return [
+        `agent-browser exceeded ${timeoutText} and was stopped ${ipcTiming}.`,
+        "Prefer a condition wait or split long work into shorter calls; for legitimately long opens or captures, pass agent_browser timeoutMs with a bounded higher value and inspect details.timeoutPartialProgress before retrying.",
+    ].join(" ");
+}
+function isUpstreamIpcReadTimeoutMessage(message) {
+    return /Failed to read: Resource temporarily unavailable(?: \(os error \d+\))?.*daemon may be busy or unresponsive/i.test(message);
+}
+function buildUpstreamIpcReadTimeoutMessage() {
+    return [
+        "agent-browser hit the upstream CLI 30s IPC read timeout while waiting for the daemon response.",
+        "The daemon may still be alive; do not blindly retry a non-idempotent command. Prefer a shorter command, split long waits, or retry with sessionMode: \"fresh\" after checking tab list.",
+    ].join(" ");
+}
+function maybeAppendStaleRefHint(message, args) {
+    const usedRef = args?.some((arg) => /^@e\d+\b/.test(arg)) ?? false;
+    if (!usedRef || !/could not locate element|element not found|no element/i.test(message)) {
+        return message;
+    }
+    return [
+        message,
+        "This @ref may be stale after navigation, scrolling, or a DOM update. Run `agent_browser` with `{ \"args\": [\"snapshot\", \"-i\"] }` again and retry with a current ref, or use a stable `find` locator.",
+    ].join("\n");
+}
+export function getAgentBrowserErrorText(options) {
+    const { aborted, envelope, exitCode, parseError, plainTextInspection, spawnError, stderr, timedOut } = options;
+    if (plainTextInspection)
+        return undefined;
+    if (timedOut)
+        return buildWatchdogTimeoutMessage(options);
+    if (aborted)
+        return "agent-browser was aborted.";
+    if (spawnError)
+        return spawnError.message;
+    if (parseError)
+        return parseError;
+    if (envelope?.success === false) {
+        const explicitErrorText = extractEnvelopeErrorText(envelope.error);
+        if ((hasStructuredBatchStepFailure(envelope.data) || detectConfirmationRequired(envelope.data)) && explicitErrorText === undefined) {
+            return undefined;
+        }
+        const envelopeErrorText = explicitErrorText
+            ?? extractEnvelopeErrorText(typeof envelope.data === "string" ? envelope.data : isRecord(envelope.data) ? envelope.data.error : undefined);
+        if (envelopeErrorText && isUpstreamIpcReadTimeoutMessage(envelopeErrorText)) {
+            return buildUpstreamIpcReadTimeoutMessage();
+        }
+        const fallback = envelopeErrorText ?? (stderr.trim() || buildFailureFallback(options));
+        return maybeAppendStaleRefHint(fallback, options.staleRefArgs ?? options.effectiveArgs);
+    }
+    if (exitCode !== 0) {
+        return stderr.trim() || buildExitCodeFallback(options);
+    }
+    return undefined;
+}

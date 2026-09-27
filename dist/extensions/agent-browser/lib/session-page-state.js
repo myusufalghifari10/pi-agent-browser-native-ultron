@@ -1,0 +1,538 @@
+import { extractUpstreamCommandTokens } from "./argv-descriptor.js";
+import { getAgentBrowserSessionIdentityKey, isAgentBrowserSessionIdentityKeyInNamespace } from "./argv-grammar.js";
+import { batchHasSuccessfulCloseAll, getSuccessfulBatchCloseLifecycle } from "./batch-lifecycle.js";
+import { isCloseAllCommand, isCloseCommand, isReadOnlyDiagnosticSessionTargetCommand, isRecordPageTransitionCommand, isUnverifiedPageTransitionCommand, isWebMcpPageMutationCommand, isWindowOrDiffPageTransitionCommand } from "./command-taxonomy.js";
+import { isRecord } from "./parsing.js";
+import { findReadConfirmation as findPendingReadConfirmation, parseReadConfirmation } from "./read-confirmation.js";
+import { getEditableRefEvidence } from "./results/editable-ref-evidence.js";
+import { enrichSnapshotRefEntries, getSnapshotRefEntries } from "./results/snapshot-refs.js";
+import { parseSnapshotLines } from "./results/snapshot-segments.js";
+export function normalizeComparableUrl(url) {
+    const normalizedUrl = url?.trim();
+    if (!normalizedUrl) {
+        return undefined;
+    }
+    try {
+        const parsedUrl = new URL(normalizedUrl);
+        parsedUrl.hash = "";
+        return parsedUrl.toString();
+    }
+    catch {
+        return undefined;
+    }
+}
+export function normalizeSessionTabTarget(target) {
+    if (!target) {
+        return undefined;
+    }
+    const url = target.url?.trim();
+    if (!url || normalizeComparableUrl(url) === undefined) {
+        return undefined;
+    }
+    const title = target.title?.trim();
+    return { title: title && title.length > 0 ? title : undefined, url };
+}
+export function isAboutBlankUrl(url) {
+    return normalizeComparableUrl(url) === "about:blank";
+}
+export function isAboutBlankSessionTabTarget(target) {
+    return isAboutBlankUrl(target?.url);
+}
+export function commandExplicitlyTargetsAboutBlank(commandTokens) {
+    return (commandTokens[0] === "window" && commandTokens[1] === "new") || commandTokens.some((token) => isAboutBlankUrl(token));
+}
+export function targetsMatch(left, right) {
+    if (!left || !right)
+        return true;
+    return normalizeComparableUrl(left.url) === normalizeComparableUrl(right.url);
+}
+function extractStringResultField(data, fieldName) {
+    if (typeof data === "string") {
+        if (fieldName === "value")
+            return data;
+        const text = data.trim();
+        return text.length > 0 ? text : undefined;
+    }
+    if (!isRecord(data) || typeof data[fieldName] !== "string") {
+        return undefined;
+    }
+    if (fieldName === "value")
+        return data[fieldName];
+    const text = data[fieldName].trim();
+    return text.length > 0 ? text : undefined;
+}
+export function extractSessionTabTargetFromData(data) {
+    const directTarget = normalizeSessionTabTarget({
+        title: extractStringResultField(data, "title"),
+        url: extractStringResultField(data, "url"),
+    });
+    if (directTarget) {
+        return directTarget;
+    }
+    if (isRecord(data) && typeof data.origin === "string") {
+        return normalizeSessionTabTarget({ url: data.origin });
+    }
+    return undefined;
+}
+function extractBatchResultCommand(item) {
+    return Array.isArray(item.command) ? item.command.filter((token) => typeof token === "string") : [];
+}
+export function extractSessionTabTargetFromCommandData(commandTokens, data) {
+    const [command, subcommand] = commandTokens;
+    if (command === "get" && subcommand === "url") {
+        return normalizeSessionTabTarget({ url: extractStringResultField(data, "url") ?? extractStringResultField(data, "result") });
+    }
+    return isReadOnlyDiagnosticSessionTargetCommand(command, subcommand) ? undefined : extractSessionTabTargetFromData(data);
+}
+export function extractSessionTabTargetFromBatchResults(data) {
+    if (!Array.isArray(data)) {
+        return undefined;
+    }
+    let currentTarget;
+    let pendingTitle;
+    for (const item of data) {
+        if (!isRecord(item))
+            continue;
+        const [name, subcommand] = extractUpstreamCommandTokens(extractBatchResultCommand(item));
+        if (isWindowOrDiffPageTransitionCommand(name, subcommand)) {
+            currentTarget = undefined;
+            pendingTitle = undefined;
+        }
+        if (item.success === false)
+            continue;
+        const result = item.result;
+        if (isCloseCommand(name)) {
+            currentTarget = undefined;
+            pendingTitle = undefined;
+            continue;
+        }
+        if (name === "get" && subcommand === "title") {
+            pendingTitle = extractStringResultField(result, "title");
+            continue;
+        }
+        if (name === "get" && subcommand === "url") {
+            const url = extractStringResultField(result, "url");
+            const target = normalizeSessionTabTarget({ title: pendingTitle, url });
+            if (target) {
+                currentTarget = target;
+            }
+            pendingTitle = undefined;
+            continue;
+        }
+        const resultTarget = extractSessionTabTargetFromCommandData([name, subcommand].filter((token) => token !== undefined), result);
+        if (resultTarget) {
+            currentTarget = resultTarget;
+        }
+        pendingTitle = undefined;
+    }
+    return currentTarget;
+}
+export function deriveSessionTabTarget(options) {
+    if (isCloseCommand(options.command)) {
+        return undefined;
+    }
+    const commandDataTarget = isReadOnlyDiagnosticSessionTargetCommand(options.command, options.subcommand)
+        ? undefined
+        : extractSessionTabTargetFromData(options.data);
+    const observedTarget = normalizeSessionTabTarget(options.navigationSummary)
+        ?? extractSessionTabTargetFromBatchResults(options.data)
+        ?? commandDataTarget;
+    if (observedTarget || !isUnverifiedPageTransitionCommand(options.command, options.subcommand))
+        return observedTarget ?? options.previousTarget;
+    return undefined;
+}
+function batchContainsOnlyReadOnlyDiagnosticTargets(data) {
+    if (!Array.isArray(data) || data.length === 0) {
+        return false;
+    }
+    return data.every((item) => {
+        if (!isRecord(item))
+            return false;
+        const [command, subcommand] = extractBatchResultCommand(item);
+        return isReadOnlyDiagnosticSessionTargetCommand(command, subcommand);
+    });
+}
+function getRestoredSessionTabTarget(details, command, subcommand) {
+    if (isReadOnlyDiagnosticSessionTargetCommand(command, subcommand)) {
+        return undefined;
+    }
+    const storedTarget = isRecord(details.sessionTabTarget)
+        ? normalizeSessionTabTarget({
+            title: typeof details.sessionTabTarget.title === "string" ? details.sessionTabTarget.title : undefined,
+            url: typeof details.sessionTabTarget.url === "string" ? details.sessionTabTarget.url : undefined,
+        })
+        : undefined;
+    if (command !== "batch") {
+        return storedTarget;
+    }
+    const batchTarget = extractSessionTabTargetFromBatchResults(details.data);
+    if (batchTarget) {
+        return batchTarget;
+    }
+    if (isRecord(details.compiledNetworkSourceLookup) || batchContainsOnlyReadOnlyDiagnosticTargets(details.data)) {
+        return undefined;
+    }
+    return storedTarget;
+}
+function extractRefSnapshotRefs(data) {
+    if (!isRecord(data) || !isRecord(data.refs))
+        return undefined;
+    const snapshotLines = typeof data.snapshot === "string" ? parseSnapshotLines(data.snapshot) : [];
+    const lineByRef = new Map(snapshotLines.flatMap((line) => line.ref ? [[line.ref, line.raw]] : []));
+    const entries = enrichSnapshotRefEntries(getSnapshotRefEntries(data), snapshotLines);
+    const refs = Object.fromEntries(entries.flatMap((entry) => {
+        if (!/^e\d+$/.test(entry.id) || entry.role.length === 0)
+            return [];
+        const isContentEditable = getEditableRefEvidence({ ref: entry.refData, text: lineByRef.get(entry.id) });
+        return [[entry.id, { ...(isContentEditable === true ? { isContentEditable: true } : {}), ...(entry.isEditable !== undefined ? { isEditable: entry.isEditable } : {}), name: entry.name, role: entry.role }]];
+    }));
+    return Object.keys(refs).length > 0 ? refs : undefined;
+}
+export function extractRefSnapshotFromData(data) {
+    if (!isRecord(data))
+        return undefined;
+    const refs = extractRefSnapshotRefs(data);
+    return {
+        refIds: isRecord(data.refs) ? Object.keys(data.refs).filter((refId) => /^e\d+$/.test(refId)) : [],
+        ...(refs ? { refs } : {}),
+        target: extractSessionTabTargetFromData(data),
+    };
+}
+function getBatchResultFailureText(item) {
+    const result = isRecord(item.result) ? item.result : undefined;
+    const parts = [item.error, result?.error, typeof item.result === "string" ? item.result : undefined]
+        .filter((part) => typeof part === "string" && part.trim().length > 0);
+    return parts.length > 0 ? parts.join("\n") : undefined;
+}
+export function buildNoActivePageRefSnapshotInvalidation() {
+    return {
+        reason: "no-active-page",
+        summary: "The latest snapshot for this session reported No active page. Old page-scoped refs are invalid until snapshot -i succeeds.",
+    };
+}
+export function buildPageTransitionRefSnapshotInvalidation(summary) {
+    return {
+        reason: "page-transition",
+        summary: summary ?? "Recording starts and URL-bearing restarts conservatively invalidate earlier page-scoped refs. Run snapshot -i before using refs; this is not evidence of a page change.",
+    };
+}
+export function getCommandRefSnapshotInvalidation(commandTokens) {
+    if (isRecordPageTransitionCommand(commandTokens))
+        return buildPageTransitionRefSnapshotInvalidation();
+    if (isWindowOrDiffPageTransitionCommand(commandTokens[0], commandTokens[1])) {
+        return buildPageTransitionRefSnapshotInvalidation("A window new or diff url command replaced or navigated the active page and invalidated prior refs. Run snapshot -i before using page-scoped refs.");
+    }
+    if (isWebMcpPageMutationCommand(commandTokens)) {
+        return buildPageTransitionRefSnapshotInvalidation("A WebMCP invoke, result, or cancel command can mutate, rerender, or navigate the page, so the prior snapshot refs were invalidated. Run snapshot -i before using page-scoped refs.");
+    }
+    return undefined;
+}
+export function isNoActivePageSnapshotFailure(command, text) {
+    return command === "snapshot" && /\bno active page\b/i.test(text ?? "");
+}
+export function extractLatestRefSnapshotStateFromBatchResults(data) {
+    if (!Array.isArray(data))
+        return undefined;
+    let latestState;
+    for (const item of data) {
+        if (!isRecord(item))
+            continue;
+        const commandTokens = extractUpstreamCommandTokens(extractBatchResultCommand(item));
+        const [name] = commandTokens;
+        if (item.success !== false && isCloseCommand(name)) {
+            latestState = undefined;
+            continue;
+        }
+        const transitionInvalidation = getCommandRefSnapshotInvalidation(commandTokens);
+        if (transitionInvalidation) {
+            latestState = { invalidation: transitionInvalidation };
+            continue;
+        }
+        if (name !== "snapshot")
+            continue;
+        if (item.success === false) {
+            if (isNoActivePageSnapshotFailure(name, getBatchResultFailureText(item))) {
+                latestState = { invalidation: buildNoActivePageRefSnapshotInvalidation() };
+            }
+            continue;
+        }
+        const snapshot = extractRefSnapshotFromData(item.result);
+        if (snapshot) {
+            latestState = { snapshot };
+        }
+    }
+    return latestState;
+}
+function getRestoredRefSnapshotInvalidation(details, command) {
+    const invalidation = isRecord(details.refSnapshotInvalidation) ? details.refSnapshotInvalidation : undefined;
+    if (invalidation?.reason === "no-active-page")
+        return buildNoActivePageRefSnapshotInvalidation();
+    if (invalidation?.reason === "page-transition")
+        return buildPageTransitionRefSnapshotInvalidation(typeof invalidation.summary === "string" ? invalidation.summary : undefined);
+    const errorText = typeof details.error === "string"
+        ? details.error
+        : typeof details.summary === "string"
+            ? details.summary
+            : undefined;
+    return isNoActivePageSnapshotFailure(command, errorText) ? buildNoActivePageRefSnapshotInvalidation() : undefined;
+}
+function getRestoredRefSnapshot(details) {
+    const refSnapshot = isRecord(details.refSnapshot) ? details.refSnapshot : undefined;
+    if (!refSnapshot || !Array.isArray(refSnapshot.refIds))
+        return undefined;
+    const refIds = refSnapshot.refIds.filter((refId) => typeof refId === "string" && /^e\d+$/.test(refId));
+    const refRecord = isRecord(refSnapshot.refs) ? refSnapshot.refs : undefined;
+    const refEntries = refRecord
+        ? Object.fromEntries(refIds.flatMap((refId) => {
+            const entry = refRecord[refId];
+            if (!isRecord(entry) || typeof entry.name !== "string" || typeof entry.role !== "string")
+                return [];
+            const isContentEditable = typeof entry.isContentEditable === "boolean" ? entry.isContentEditable : undefined;
+            const isEditable = typeof entry.isEditable === "boolean" ? entry.isEditable : undefined;
+            return [[refId, { ...(isContentEditable !== undefined ? { isContentEditable } : {}), ...(isEditable !== undefined ? { isEditable } : {}), name: entry.name, role: entry.role }]];
+        }))
+        : undefined;
+    return {
+        refIds,
+        ...(refEntries && Object.keys(refEntries).length > 0 ? { refs: refEntries } : {}),
+        target: isRecord(refSnapshot.target)
+            ? normalizeSessionTabTarget({
+                title: typeof refSnapshot.target.title === "string" ? refSnapshot.target.title : undefined,
+                url: typeof refSnapshot.target.url === "string" ? refSnapshot.target.url : undefined,
+            })
+            : undefined,
+    };
+}
+function getLatestTabTargetOrder(targets, unknownTargets) {
+    let latestOrder = 0;
+    for (const target of targets.values())
+        latestOrder = Math.max(latestOrder, target.order);
+    for (const order of unknownTargets.values())
+        latestOrder = Math.max(latestOrder, order);
+    return latestOrder;
+}
+function getLatestRefStateOrder(snapshots, invalidations) {
+    let latestOrder = 0;
+    for (const snapshot of snapshots.values())
+        latestOrder = Math.max(latestOrder, snapshot.order);
+    for (const invalidation of invalidations.values())
+        latestOrder = Math.max(latestOrder, invalidation.order);
+    return latestOrder;
+}
+function shouldApplyTabTargetUpdate(current, unknownOrder, updateOrder) {
+    return updateOrder >= Math.max(current?.order ?? 0, unknownOrder ?? 0);
+}
+function shouldApplyRefStateUpdate(options) {
+    const currentOrder = Math.max(options.currentSnapshot?.order ?? 0, options.currentInvalidation?.order ?? 0);
+    return options.updateOrder >= currentOrder;
+}
+function stripRefSnapshotOrder(snapshot) {
+    return snapshot ? { refIds: snapshot.refIds, ...(snapshot.refs ? { refs: snapshot.refs } : {}), target: snapshot.target } : undefined;
+}
+function stripRefSnapshotInvalidationOrder(invalidation) {
+    return invalidation ? { reason: invalidation.reason, summary: invalidation.summary } : undefined;
+}
+export function getSessionPageStateKey(sessionName, namespace) {
+    return sessionName ? getAgentBrowserSessionIdentityKey(sessionName, namespace) : undefined;
+}
+export class SessionPageState {
+    readConfirmations = new Map();
+    refSnapshotInvalidations = new Map();
+    refSnapshots = new Map();
+    tabPinningReasons = new Map();
+    tabTargetUnknownOrders = new Map();
+    tabTargets = new Map();
+    updateOrder = 0;
+    static fromBranch(branch) {
+        const state = new SessionPageState();
+        let restoredOrder = 0;
+        for (const entry of branch) {
+            if (!isRecord(entry) || entry.type !== "message")
+                continue;
+            const message = isRecord(entry.message) ? entry.message : undefined;
+            if (!message || message.toolName !== "agent_browser")
+                continue;
+            const details = isRecord(message.details) ? message.details : undefined;
+            if (!details)
+                continue;
+            const sessionName = typeof details.sessionName === "string" ? details.sessionName : undefined;
+            const namespace = typeof details.namespace === "string" ? details.namespace : undefined;
+            const sessionKey = getSessionPageStateKey(sessionName, namespace);
+            const args = Array.isArray(details.args) && details.args.every((arg) => typeof arg === "string") ? details.args : [];
+            const commandTokens = extractUpstreamCommandTokens(args);
+            const command = typeof details.command === "string" ? details.command : commandTokens[0];
+            const subcommand = typeof details.subcommand === "string" ? details.subcommand : commandTokens[1];
+            const batchCloseLifecycle = getSuccessfulBatchCloseLifecycle(details.batchSteps);
+            const closeAllApplied = details.closeAllApplied === true
+                || (message.isError !== true && isCloseAllCommand(commandTokens))
+                || batchHasSuccessfulCloseAll(details.batchSteps);
+            const lifecycleReset = (isCloseCommand(command) && message.isError !== true) || batchCloseLifecycle !== undefined;
+            if (closeAllApplied) {
+                restoredOrder += 1;
+                state.clearNamespace(namespace);
+            }
+            else if (sessionKey && lifecycleReset) {
+                restoredOrder += 1;
+                state.clearSession(sessionKey);
+            }
+            const readConfirmation = parseReadConfirmation(details.readConfirmation);
+            if (readConfirmation)
+                state.applyReadConfirmation(readConfirmation, ++restoredOrder);
+            if (!sessionKey || ((closeAllApplied || lifecycleReset) && (isCloseCommand(command) || batchCloseLifecycle?.endsClosed === true)))
+                continue;
+            const tabTarget = getRestoredSessionTabTarget(details, command, subcommand);
+            const tabTargetUnknown = details.sessionTabTargetUnknown === true;
+            const reopenPending = typeof details.sessionTabReopenPending === "boolean" ? details.sessionTabReopenPending : undefined;
+            const refSnapshotInvalidation = getRestoredRefSnapshotInvalidation(details, command);
+            const refSnapshot = refSnapshotInvalidation ? undefined : getRestoredRefSnapshot(details);
+            if (!tabTarget && !tabTargetUnknown && !refSnapshotInvalidation && !refSnapshot && reopenPending === undefined)
+                continue;
+            restoredOrder += 1;
+            if (tabTargetUnknown) {
+                state.refSnapshots.delete(sessionKey);
+                if (refSnapshotInvalidation)
+                    state.refSnapshotInvalidations.set(sessionKey, { ...refSnapshotInvalidation, order: restoredOrder });
+                else
+                    state.refSnapshotInvalidations.delete(sessionKey);
+                state.tabTargets.delete(sessionKey);
+                state.tabTargetUnknownOrders.set(sessionKey, restoredOrder);
+                continue;
+            }
+            if (tabTarget) {
+                state.tabTargetUnknownOrders.delete(sessionKey);
+                state.tabTargets.set(sessionKey, { order: restoredOrder, reopenPending: state.tabTargets.get(sessionKey)?.reopenPending, target: tabTarget });
+            }
+            const currentTarget = state.tabTargets.get(sessionKey);
+            if (currentTarget && reopenPending !== undefined)
+                currentTarget.reopenPending = reopenPending;
+            if (refSnapshotInvalidation) {
+                state.refSnapshots.delete(sessionKey);
+                state.refSnapshotInvalidations.set(sessionKey, { ...refSnapshotInvalidation, order: restoredOrder });
+            }
+            else if (refSnapshot) {
+                state.refSnapshotInvalidations.delete(sessionKey);
+                state.refSnapshots.set(sessionKey, { ...refSnapshot, order: restoredOrder });
+            }
+        }
+        state.updateOrder = Math.max(restoredOrder, getLatestTabTargetOrder(state.tabTargets, state.tabTargetUnknownOrders), getLatestRefStateOrder(state.refSnapshots, state.refSnapshotInvalidations));
+        state.tabPinningReasons = new Map([...state.tabTargets.keys()].map((sessionName) => [sessionName, "restore"]));
+        return state;
+    }
+    beginUpdate() {
+        this.updateOrder += 1;
+        return this.updateOrder;
+    }
+    reset() {
+        this.readConfirmations.clear();
+        this.refSnapshotInvalidations = new Map();
+        this.refSnapshots = new Map();
+        this.tabPinningReasons = new Map();
+        this.tabTargetUnknownOrders = new Map();
+        this.tabTargets = new Map();
+        this.updateOrder = 0;
+    }
+    get(sessionName) {
+        if (!sessionName)
+            return {};
+        return {
+            pinningReason: this.tabPinningReasons.get(sessionName),
+            ...(this.tabTargets.get(sessionName)?.reopenPending !== undefined ? { tabReopenPending: this.tabTargets.get(sessionName)?.reopenPending } : {}),
+            refSnapshot: stripRefSnapshotOrder(this.refSnapshots.get(sessionName)),
+            refSnapshotInvalidation: stripRefSnapshotInvalidationOrder(this.refSnapshotInvalidations.get(sessionName)),
+            ...(this.tabTargetUnknownOrders.has(sessionName) ? { tabTargetUnknown: true } : {}),
+            tabTarget: this.tabTargets.get(sessionName)?.target,
+        };
+    }
+    findReadConfirmation(args, namespace) {
+        return findPendingReadConfirmation(args, [...this.readConfirmations.values()].map(entry => entry.value), namespace);
+    }
+    getReadConfirmation(sessionKey) {
+        return this.readConfirmations.get(sessionKey)?.value;
+    }
+    applyReadConfirmation(value, update) {
+        const key = getAgentBrowserSessionIdentityKey(value.sessionName, value.namespace);
+        if (update >= (this.readConfirmations.get(key)?.order ?? 0))
+            this.readConfirmations.set(key, { value, order: update });
+    }
+    applyTabTarget(options) {
+        const current = this.tabTargets.get(options.sessionName);
+        if (!shouldApplyTabTargetUpdate(current, this.tabTargetUnknownOrders.get(options.sessionName), options.update)) {
+            return { ...this.get(options.sessionName), applied: false, stale: true };
+        }
+        this.tabTargetUnknownOrders.delete(options.sessionName);
+        this.tabTargets.set(options.sessionName, { order: options.update, reopenPending: current?.reopenPending, target: options.target });
+        return { ...this.get(options.sessionName), applied: true };
+    }
+    setTabReopenPending(options) {
+        const current = this.tabTargets.get(options.sessionName);
+        if (!current || !shouldApplyTabTargetUpdate(current, this.tabTargetUnknownOrders.get(options.sessionName), options.update))
+            return;
+        this.tabTargets.set(options.sessionName, { ...current, order: options.update, reopenPending: options.pending });
+    }
+    applyRefSnapshot(options) {
+        if (!shouldApplyRefStateUpdate({
+            currentInvalidation: this.refSnapshotInvalidations.get(options.sessionName),
+            currentSnapshot: this.refSnapshots.get(options.sessionName),
+            updateOrder: options.update,
+        })) {
+            return { ...this.get(options.sessionName), applied: false, stale: true };
+        }
+        const snapshot = { ...options.snapshot, target: options.snapshot.target ?? options.fallbackTarget };
+        this.refSnapshotInvalidations.delete(options.sessionName);
+        this.refSnapshots.set(options.sessionName, { ...snapshot, order: options.update });
+        return { ...this.get(options.sessionName), applied: true };
+    }
+    applyRefSnapshotInvalidation(options) {
+        if (!shouldApplyRefStateUpdate({
+            currentInvalidation: this.refSnapshotInvalidations.get(options.sessionName),
+            currentSnapshot: this.refSnapshots.get(options.sessionName),
+            updateOrder: options.update,
+        })) {
+            return { ...this.get(options.sessionName), applied: false, stale: true };
+        }
+        this.refSnapshots.delete(options.sessionName);
+        this.refSnapshotInvalidations.set(options.sessionName, { ...options.invalidation, order: options.update });
+        return { ...this.get(options.sessionName), applied: true };
+    }
+    markTabTargetUnknown(options) {
+        const current = this.tabTargets.get(options.sessionName);
+        if (!shouldApplyTabTargetUpdate(current, this.tabTargetUnknownOrders.get(options.sessionName), options.update))
+            return { ...this.get(options.sessionName), applied: false, stale: true };
+        this.refSnapshotInvalidations.delete(options.sessionName);
+        this.refSnapshots.delete(options.sessionName);
+        this.tabPinningReasons.delete(options.sessionName);
+        this.tabTargets.delete(options.sessionName);
+        this.tabTargetUnknownOrders.set(options.sessionName, options.update);
+        return { ...this.get(options.sessionName), applied: true };
+    }
+    clearSession(sessionName) {
+        this.readConfirmations.delete(sessionName);
+        this.refSnapshotInvalidations.delete(sessionName);
+        this.refSnapshots.delete(sessionName);
+        this.tabPinningReasons.delete(sessionName);
+        this.tabTargetUnknownOrders.delete(sessionName);
+        this.tabTargets.delete(sessionName);
+    }
+    clearNamespace(namespace) {
+        const sessionKeys = new Set([
+            ...this.readConfirmations.keys(),
+            ...this.refSnapshotInvalidations.keys(),
+            ...this.refSnapshots.keys(),
+            ...this.tabPinningReasons.keys(),
+            ...this.tabTargetUnknownOrders.keys(),
+            ...this.tabTargets.keys(),
+        ]);
+        for (const sessionKey of sessionKeys) {
+            if (isAgentBrowserSessionIdentityKeyInNamespace(sessionKey, namespace))
+                this.clearSession(sessionKey);
+        }
+    }
+    markPinning(sessionName, reason) {
+        this.tabPinningReasons.set(sessionName, reason);
+    }
+    clearRestorePinning(sessionName) {
+        if (this.tabPinningReasons.get(sessionName) === "restore") {
+            this.tabPinningReasons.delete(sessionName);
+        }
+    }
+}

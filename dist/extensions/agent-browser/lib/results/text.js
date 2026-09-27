@@ -1,0 +1,33 @@
+export function stringifyUnknown(value) {
+    if (typeof value === "string")
+        return value;
+    if (typeof value === "number" || typeof value === "boolean")
+        return String(value);
+    if (value === null || value === undefined)
+        return "";
+    try {
+        return JSON.stringify(value, null, 2);
+    }
+    catch {
+        return String(value);
+    }
+}
+export function countLines(text) {
+    return text.length === 0 ? 0 : text.split("\n").length;
+}
+export function normalizeWhitespace(text) {
+    return text.replace(/\s+/g, " ").trim();
+}
+export function truncateText(text, maxChars) {
+    if (text.length <= maxChars)
+        return text;
+    return `${text.slice(0, Math.max(1, maxChars - 1))}…`;
+}
+export function compareRefIds(left, right) {
+    const leftMatch = left.match(/^(?:[a-zA-Z]+)?(\d+)$/);
+    const rightMatch = right.match(/^(?:[a-zA-Z]+)?(\d+)$/);
+    if (leftMatch && rightMatch) {
+        return Number(leftMatch[1]) - Number(rightMatch[1]);
+    }
+    return left.localeCompare(right);
+}

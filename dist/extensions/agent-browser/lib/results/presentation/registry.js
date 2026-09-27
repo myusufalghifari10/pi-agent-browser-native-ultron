@@ -1,0 +1,265 @@
+import { isRecord } from "../../parsing.js";
+import { detectConfirmationRequired } from "../confirmation.js";
+import { formatRawSnapshotText, formatSnapshotSummary } from "../snapshot.js";
+import { getPageSummary, omitUpstreamLifecycle, redactModelFacingText, stringifyModelFacing } from "./common.js";
+import { formatDiagnosticSummary, formatDiagnosticText, formatProfilesText, getStreamSummary, getTabSummary } from "./diagnostics.js";
+import { getScreenshotSummary } from "./artifacts.js";
+import { formatSkillsText } from "./skills.js";
+import { formatExtractionSummary, formatExtractionText, formatNavigationActionResult, formatNavigationSummary, getNavigationSummary, isNavigationObservableCommand, } from "./navigation.js";
+import { formatSemanticActionPresentationSummary, formatSemanticActionPresentationText, resolvePresentationCommandInfo, } from "./semantic-action.js";
+function formatConfirmationRequiredSummary(confirmation) {
+    return `Confirmation required: ${confirmation.id}`;
+}
+const SIMPLE_ACTION_RESULTS = {
+    check: { field: "checked", label: "Checked" },
+    click: { field: "clicked", label: "Clicked" },
+    fill: { field: "filled", label: "Filled" },
+    focus: { field: "focused", label: "Focused" },
+    hover: { field: "hovered", label: "Hovered" },
+    press: { field: "pressed", label: "Pressed" },
+    select: { field: "selected", label: "Selected" },
+    type: { field: "typed", label: "Typed" },
+    uncheck: { field: "unchecked", label: "Unchecked" },
+};
+function formatSimpleActionResult(command, data) {
+    if (!isRecord(data))
+        return undefined;
+    if (command === "click" && getNavigationSummary(data))
+        return undefined;
+    const definition = SIMPLE_ACTION_RESULTS[command];
+    if (!definition)
+        return undefined;
+    const value = data[definition.field];
+    if (typeof value !== "string" && typeof value !== "number" && typeof value !== "boolean")
+        return undefined;
+    return `${definition.label}: ${redactModelFacingText(String(value))}`;
+}
+function formatWaitResult(data) {
+    if (!isRecord(data))
+        return undefined;
+    if (data.waited === "timeout")
+        return "Fixed wait elapsed; no page condition was verified.";
+    for (const field of ["selector", "text", "url", "state", "waited"]) {
+        const value = data[field];
+        if (typeof value === "string" && value.length > 0)
+            return `Wait completed: ${redactModelFacingText(value)}`;
+    }
+    return undefined;
+}
+function formatCloseResult(data) {
+    return isRecord(data) && data.closed === true ? "Browser session closed." : undefined;
+}
+const VITALS_METRICS = ["lcp", "fcp", "ttfb", "inp", "cls"];
+function coerceVitalsMetricValue(value) {
+    if (typeof value === "number" && Number.isFinite(value))
+        return value;
+    if (isRecord(value)) {
+        for (const nestedKey of ["value", "duration", "startTime", "score"]) {
+            const nestedValue = value[nestedKey];
+            if (typeof nestedValue === "number" && Number.isFinite(nestedValue))
+                return nestedValue;
+        }
+    }
+    return undefined;
+}
+function getVitalsMetric(data, key) {
+    const metrics = isRecord(data.metrics) ? data.metrics : undefined;
+    return coerceVitalsMetricValue(data[key] ?? data[key.toUpperCase()] ?? metrics?.[key] ?? metrics?.[key.toUpperCase()]);
+}
+function formatVitalsMetric(key, value) {
+    return key === "cls" ? `${key.toUpperCase()}: ${value}` : `${key.toUpperCase()}: ${Math.round(value)}ms`;
+}
+function getVitalsMetrics(data) {
+    return VITALS_METRICS.flatMap((key) => {
+        const value = getVitalsMetric(data, key);
+        return value === undefined ? [] : [formatVitalsMetric(key, value)];
+    });
+}
+function getVitalsUnavailableReason(data) {
+    for (const key of ["reason", "message", "error", "status"]) {
+        const value = data[key];
+        if (typeof value === "string" && value.trim().length > 0)
+            return redactModelFacingText(value.trim());
+    }
+    return "No Core Web Vitals metric fields were present in the upstream result.";
+}
+function formatVitalsText(data) {
+    const url = typeof data.url === "string" && data.url.trim().length > 0 ? redactModelFacingText(data.url.trim()) : undefined;
+    const metrics = getVitalsMetrics(data);
+    const lines = [url ? `Vitals for ${url}` : "Vitals result"];
+    if (metrics.length > 0)
+        lines.push(...metrics.map((metric) => `- ${metric}`));
+    else
+        lines.push(`Metrics unavailable: ${getVitalsUnavailableReason(data)}`);
+    return lines.join("\n");
+}
+function formatVitalsSummary(data) {
+    const metrics = getVitalsMetrics(data);
+    if (metrics.length > 0)
+        return `Vitals: ${metrics.join(", ")}`;
+    return "Vitals: metrics unavailable";
+}
+function formatConfirmationRequiredText(confirmation) {
+    const lines = [
+        "Confirmation required.",
+        `Pending confirmation id: ${confirmation.id}`,
+    ];
+    if (confirmation.actionText)
+        lines.push(`Action: ${confirmation.actionText}`);
+    lines.push("", "Next steps:", `- Approve: { "args": ["confirm", "${confirmation.id}"] }`, `- Deny: { "args": ["deny", "${confirmation.id}"] }`);
+    return lines.join("\n");
+}
+const COMMAND_PRESENTERS = {
+    ...Object.fromEntries(Object.keys(SIMPLE_ACTION_RESULTS).map((command) => [command, {
+            summary: (_commandInfo, data) => formatSimpleActionResult(command, data),
+            text: (_commandInfo, data) => formatSimpleActionResult(command, data),
+        }])),
+    close: { summary: (_commandInfo, data) => formatCloseResult(data), text: (_commandInfo, data) => formatCloseResult(data) },
+    exit: { summary: (_commandInfo, data) => formatCloseResult(data), text: (_commandInfo, data) => formatCloseResult(data) },
+    quit: { summary: (_commandInfo, data) => formatCloseResult(data), text: (_commandInfo, data) => formatCloseResult(data) },
+    wait: { summary: (_commandInfo, data) => formatWaitResult(data), text: (_commandInfo, data) => formatWaitResult(data) },
+    profiles: {
+        summary: (_commandInfo, data) => Array.isArray(data) ? `Chrome profiles: ${data.length}` : undefined,
+        text: (_commandInfo, data) => Array.isArray(data) ? formatProfilesText(data, "Chrome profiles") : undefined,
+    },
+    read: {
+        summary: (_commandInfo, data) => isRecord(data) && typeof (data.finalUrl ?? data.url) === "string" ? `Read: ${data.finalUrl ?? data.url}` : undefined,
+        text: (_commandInfo, data) => isRecord(data) && typeof data.content === "string" ? redactModelFacingText(data.content) : undefined,
+    },
+    screenshot: {
+        summary: (_commandInfo, data) => isRecord(data) && typeof data.path === "string" ? `Screenshot saved: ${data.path}` : undefined,
+        text: (_commandInfo, data) => isRecord(data) ? getScreenshotSummary(data) : undefined,
+    },
+    skills: {
+        summary: (commandInfo, data) => {
+            if (Array.isArray(data) && commandInfo.subcommand === "list")
+                return `agent-browser skills: ${data.length}`;
+            if (commandInfo.subcommand === "get")
+                return "agent-browser skill loaded";
+            if (commandInfo.subcommand === "path")
+                return "agent-browser skill path";
+            return undefined;
+        },
+        text: formatSkillsText,
+    },
+    snapshot: {
+        summary: (_commandInfo, data) => isRecord(data) ? formatSnapshotSummary(data) : undefined,
+        text: (_commandInfo, data) => isRecord(data) ? formatRawSnapshotText(data) : undefined,
+    },
+    stream: {
+        summary: (commandInfo, data) => {
+            if (!isRecord(data) || commandInfo.subcommand !== "status")
+                return undefined;
+            const port = typeof data.port === "number" ? ` on port ${data.port}` : "";
+            return `Stream ${data.enabled === true ? "enabled" : "disabled"}${port}`;
+        },
+        text: (commandInfo, data) => isRecord(data) && commandInfo.subcommand === "status" ? getStreamSummary(data) : undefined,
+    },
+    tab: {
+        summary: (_commandInfo, data) => isRecord(data) && Array.isArray(data.tabs)
+            ? `Tabs: ${data.tabs.length}`
+            : isRecord(data) && data.closed === true ? "Tab closed" : undefined,
+        text: (_commandInfo, data) => isRecord(data) && data.closed === true
+            ? `Tab closed${typeof data.tabId === "string" ? `: ${redactModelFacingText(data.tabId)}` : "."}`
+            : isRecord(data) ? getTabSummary(data) : undefined,
+    },
+    vitals: {
+        summary: (_commandInfo, data) => isRecord(data) ? formatVitalsSummary(data) : undefined,
+        text: (_commandInfo, data) => isRecord(data) ? formatVitalsText(data) : undefined,
+    },
+    "web-vitals": {
+        summary: (_commandInfo, data) => isRecord(data) ? formatVitalsSummary(data) : undefined,
+        text: (_commandInfo, data) => isRecord(data) ? formatVitalsText(data) : undefined,
+    },
+};
+function formatBatchSummary(data) {
+    if (!Array.isArray(data))
+        return undefined;
+    const successCount = data.filter((item) => isRecord(item) && item.success !== false).length;
+    return successCount === data.length
+        ? `Batch: ${successCount}/${data.length} succeeded`
+        : `Batch failed: ${successCount}/${data.length} succeeded`;
+}
+export function formatPresentationSummary(commandInfo, data, compiledSemanticAction) {
+    const confirmationRequired = detectConfirmationRequired(data);
+    if (confirmationRequired)
+        return formatConfirmationRequiredSummary(confirmationRequired);
+    const presentationCommandInfo = resolvePresentationCommandInfo(commandInfo, compiledSemanticAction);
+    if (commandInfo.command === "batch") {
+        const batchSummary = formatBatchSummary(data);
+        if (batchSummary)
+            return batchSummary;
+    }
+    if (isRecord(data)) {
+        if (compiledSemanticAction) {
+            const semanticSummary = formatSemanticActionPresentationSummary(compiledSemanticAction, data);
+            if (semanticSummary)
+                return semanticSummary;
+        }
+        const navigationSummary = getNavigationSummary(data);
+        if (navigationSummary && isNavigationObservableCommand(presentationCommandInfo.command, presentationCommandInfo.subcommand)) {
+            const navigationText = formatNavigationSummary(navigationSummary);
+            if (navigationText) {
+                return `${presentationCommandInfo.command ?? "navigation"} → ${navigationText.split("\n", 1)[0] ?? navigationText}`;
+            }
+        }
+    }
+    const presenterSummary = commandInfo.command ? COMMAND_PRESENTERS[commandInfo.command]?.summary?.(commandInfo, data) : undefined;
+    if (presenterSummary)
+        return presenterSummary;
+    if (isRecord(data)) {
+        const diagnosticSummary = formatDiagnosticSummary(commandInfo, data);
+        if (diagnosticSummary)
+            return diagnosticSummary;
+        const extractionSummary = formatExtractionSummary(commandInfo, data);
+        if (extractionSummary)
+            return extractionSummary;
+        const pageSummary = getPageSummary(data);
+        if (pageSummary)
+            return pageSummary.split("\n", 1)[0] ?? "agent-browser result";
+    }
+    if (typeof data === "string" && data.length > 0)
+        return data.split("\n", 1)[0] ?? data;
+    return `${presentationCommandInfo.command ?? commandInfo.command ?? "agent-browser"} completed`;
+}
+export function formatPresentationContentText(commandInfo, data, compiledSemanticAction) {
+    const confirmationRequired = detectConfirmationRequired(data);
+    if (confirmationRequired)
+        return formatConfirmationRequiredText(confirmationRequired);
+    const presenterText = commandInfo.command ? COMMAND_PRESENTERS[commandInfo.command]?.text?.(commandInfo, data) : undefined;
+    if (presenterText)
+        return presenterText;
+    if (typeof data === "string")
+        return redactModelFacingText(data);
+    if (typeof data === "number" || typeof data === "boolean")
+        return String(data);
+    if (!isRecord(data))
+        return stringifyModelFacing(data);
+    if (compiledSemanticAction) {
+        const semanticText = formatSemanticActionPresentationText(compiledSemanticAction, data);
+        if (semanticText)
+            return semanticText;
+    }
+    const presentationCommandInfo = resolvePresentationCommandInfo(commandInfo, compiledSemanticAction);
+    const navigationSummary = getNavigationSummary(data);
+    if (navigationSummary && isNavigationObservableCommand(presentationCommandInfo.command, presentationCommandInfo.subcommand)) {
+        const navigationText = formatNavigationSummary(navigationSummary);
+        if (navigationText) {
+            const actionText = formatNavigationActionResult(data);
+            return actionText ? `${actionText}\n\nCurrent page:\n${navigationText}` : `Current page:\n${navigationText}`;
+        }
+    }
+    const extractionText = formatExtractionText(commandInfo, data);
+    if (extractionText)
+        return extractionText;
+    const diagnosticText = formatDiagnosticText(commandInfo, data);
+    if (diagnosticText)
+        return diagnosticText;
+    const pageSummary = getPageSummary(data);
+    if (pageSummary)
+        return redactModelFacingText(pageSummary);
+    const { navigationSummary: _navigationSummary, ...pageData } = omitUpstreamLifecycle(data);
+    if (Object.keys(pageData).length > 0)
+        return stringifyModelFacing(pageData);
+    return `${presentationCommandInfo.command ?? commandInfo.command ?? "agent-browser"} completed`;
+}

@@ -1,0 +1,118 @@
+import { lstatSync, readlinkSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join, resolve } from "node:path";
+import { foldAgentBrowserFilesystemIdentity } from "../../argv-grammar.js";
+import { parseWaitCommandTokens } from "../../argv-descriptor.js";
+import { getRecordCommandOperands } from "../../command-taxonomy.js";
+const SCREENSHOT_IMAGE_EXTENSIONS = [".jpeg", ".jpg", ".png", ".webp"];
+function isSingleScreenshotPathToken(token) {
+    const explicitlyRelative = token.startsWith("./") || token.startsWith("../");
+    if (token.startsWith("#") || token.startsWith("@") || (token.startsWith(".") && !explicitlyRelative && !token.includes("/")))
+        return false;
+    return explicitlyRelative || token.includes("/") || SCREENSHOT_IMAGE_EXTENSIONS.some((extension) => token.endsWith(extension));
+}
+function getScreenshotPositionalIndices(commandTokens) {
+    if (commandTokens[0] !== "screenshot")
+        return [];
+    const positionalIndices = [];
+    for (let index = 1; index < commandTokens.length; index += 1) {
+        const token = commandTokens[index];
+        if (token === "--full" || token === "-f")
+            continue;
+        positionalIndices.push(index);
+    }
+    return positionalIndices;
+}
+export function getScreenshotPathTokenIndex(commandTokens) {
+    const positionalIndices = getScreenshotPositionalIndices(commandTokens);
+    if (positionalIndices.length === 0)
+        return undefined;
+    const candidateIndex = positionalIndices.length >= 2 ? positionalIndices[1] : positionalIndices[0];
+    const candidate = commandTokens[candidateIndex];
+    if (positionalIndices.length >= 2 || isSingleScreenshotPathToken(candidate)) {
+        return candidateIndex;
+    }
+    return undefined;
+}
+const DIFF_SCREENSHOT_VALUE_FLAGS = new Set(["-b", "--baseline", "-o", "--output", "-s", "--selector", "-t", "--threshold"]);
+function getDiffScreenshotOutputPath(commandTokens) {
+    let outputPath;
+    for (let index = 2; index < commandTokens.length; index += 1) {
+        const token = commandTokens[index];
+        if (!DIFF_SCREENSHOT_VALUE_FLAGS.has(token))
+            continue;
+        const value = commandTokens[index + 1];
+        if (value === undefined)
+            return undefined;
+        if (token === "-o" || token === "--output")
+            outputPath = value;
+        index += 1;
+    }
+    return outputPath;
+}
+function canonicalizeArtifactPath(absolutePath, platform, seenSymlinks) {
+    let cursor = absolutePath;
+    const suffix = [];
+    while (true) {
+        try {
+            const canonicalPath = join(realpathSync.native(cursor), ...suffix);
+            try {
+                const stats = statSync(canonicalPath, { bigint: true });
+                if (stats.ino > 0n)
+                    return `inode:${stats.dev}:${stats.ino}`;
+            }
+            catch {
+                // The destination does not exist yet; canonical ancestry still catches aliases.
+            }
+            return foldAgentBrowserFilesystemIdentity(canonicalPath, platform);
+        }
+        catch {
+            let symlinkTarget;
+            try {
+                if (lstatSync(cursor).isSymbolicLink())
+                    symlinkTarget = resolve(dirname(cursor), readlinkSync(cursor));
+            }
+            catch { }
+            if (symlinkTarget) {
+                if (seenSymlinks.has(cursor))
+                    throw new Error(`Artifact destination contains a symlink loop: ${absolutePath}`);
+                if (seenSymlinks.size >= 32)
+                    throw new Error(`Artifact destination has too many symlink hops: ${absolutePath}`);
+                seenSymlinks.add(cursor);
+                return canonicalizeArtifactPath(join(symlinkTarget, ...suffix), platform, seenSymlinks);
+            }
+            const parent = dirname(cursor);
+            if (parent === cursor)
+                return foldAgentBrowserFilesystemIdentity(absolutePath, platform);
+            suffix.unshift(basename(cursor));
+            cursor = parent;
+        }
+    }
+}
+export function canonicalizeExplicitArtifactDestination(cwd, destination, platform = process.platform) {
+    return canonicalizeArtifactPath(resolve(cwd, destination), platform, new Set());
+}
+export function getExplicitArtifactDestination(commandTokens) {
+    const command = commandTokens[0];
+    const subcommand = commandTokens[1];
+    if (command === "screenshot") {
+        const index = getScreenshotPathTokenIndex(commandTokens);
+        return index === undefined ? undefined : commandTokens[index];
+    }
+    if (command === "download")
+        return commandTokens[2];
+    if (command === "pdf")
+        return commandTokens[1];
+    if (command === "wait")
+        return parseWaitCommandTokens(commandTokens).downloadPath;
+    if (command === "state" && subcommand === "save")
+        return commandTokens[2];
+    if (command === "diff" && subcommand === "screenshot")
+        return getDiffScreenshotOutputPath(commandTokens);
+    if (command === "network" && subcommand === "har" && commandTokens[2] === "stop")
+        return commandTokens[3];
+    if ((command === "trace" || command === "profiler") && subcommand === "stop")
+        return commandTokens[2];
+    if (command === "record")
+        return getRecordCommandOperands(commandTokens).path;
+    return undefined;
+}

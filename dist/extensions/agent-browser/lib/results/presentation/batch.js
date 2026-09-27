@@ -1,0 +1,497 @@
+import { stat } from "node:fs/promises";
+import { isCloseCommand } from "../../command-taxonomy.js";
+import { isRecord } from "../../parsing.js";
+import { getAgentBrowserSessionIdentityKey } from "../../argv-grammar.js";
+import { extractUpstreamCommandTokens, parseCommandInfo, redactInvocationArgs, redactSensitiveText, redactSensitiveValue } from "../../runtime.js";
+import { buildAgentBrowserNextActions } from "../action-recommendations.js";
+import { buildPendingWebMcpNextActions } from "../recovery-next-actions.js";
+import { formatSessionArtifactRetentionSummary, isPendingRecordingArtifact } from "../artifact-manifest.js";
+import { classifyAgentBrowserFailureCategory } from "../categories.js";
+import { detectConfirmationRequired } from "../confirmation.js";
+import { applyNetworkRouteRecords, buildNetworkRouteDiagnostics } from "../network-routes.js";
+import { appendUniqueAgentBrowserNextActions, applyNamespaceToNextActions, withOptionalSessionArgs } from "../next-actions.js";
+import { extractAgentBrowserLifecycle, stringifyModelFacing } from "./common.js";
+import { buildArtifactVerificationSummary, classifyPresentationSuccessCategory, manifestHasNewNoticeWorthyEntries } from "./artifacts.js";
+import { formatBatchStepCommand, getPresentationImages, getPresentationPaths, getPresentationText, isStringArray } from "./content.js";
+import { buildPageChangeSummary } from "./navigation.js";
+import { applySnapshotStepFilter, formatSnapshotStepFilterSummary, parseSnapshotStepFilter } from "./snapshot-step-filter.js";
+import { appendSelectorRecoveryHint, getClipboardWritePayloadCandidates, isOverlayBlockedClickError, redactClipboardPermissionErrorValue } from "./errors.js";
+export function isAgentBrowserBatchResultArray(value) {
+    return Array.isArray(value) && value.every(isRecord);
+}
+function isWaitTextAssertionCommand(command) {
+    return command?.[0] === "wait" && command.includes("--text");
+}
+function buildWaitTextAssertionFailureNextAction(sessionName) {
+    return {
+        id: "inspect-after-text-assertion-failure",
+        params: { args: withOptionalSessionArgs(sessionName, ["snapshot", "-i"]) },
+        reason: "Inspect the current page after the text assertion failed before concluding the expected text is absent.",
+        safety: "Read-only snapshot; use current refs or visible text from this page before retrying the assertion.",
+        tool: "agent_browser",
+    };
+}
+function mergePresentationNextActions(...groups) {
+    const actions = [];
+    const seen = new Set();
+    for (const group of groups) {
+        for (const action of group ?? []) {
+            if (seen.has(action.id))
+                continue;
+            actions.push(action);
+            seen.add(action.id);
+        }
+    }
+    return actions.length > 0 ? actions : undefined;
+}
+function formatBatchStepError(error) {
+    const errorText = stringifyModelFacing(error).trim();
+    const formattedErrorText = errorText.length > 0 ? `Error: ${errorText}` : "Error: batch step failed.";
+    return appendSelectorRecoveryHint(formattedErrorText);
+}
+function getBatchFailureDetails(steps) {
+    const failedSteps = steps.filter((step) => step.details.success === false);
+    if (failedSteps.length === 0)
+        return undefined;
+    const successCount = steps.length - failedSteps.length;
+    return {
+        failedStep: failedSteps[0].details,
+        failureCount: failedSteps.length,
+        successCount,
+        totalCount: steps.length,
+    };
+}
+function hasModelFacingArgRedaction(args) {
+    return args?.some((arg) => arg === "[REDACTED]" || arg.includes("%5BREDACTED%5D") || arg.includes("[REDACTED]")) === true;
+}
+function getStatefulCommandSensitiveValues(command) {
+    if (!command)
+        return [];
+    const tokens = extractUpstreamCommandTokens(command);
+    const values = [];
+    if (tokens[0] === "cookies" && tokens[1] === "set" && tokens[3])
+        values.push(tokens[3]);
+    if (tokens[0] === "storage" && ["local", "session"].includes(tokens[1] ?? "") && tokens[2] === "set" && tokens[4])
+        values.push(tokens[4]);
+    for (let index = 0; index < tokens.length; index += 1) {
+        const token = tokens[index];
+        if (token === "--password" && tokens[index + 1])
+            values.push(tokens[index + 1]);
+        else if (token?.startsWith("--password="))
+            values.push(token.slice("--password=".length));
+    }
+    return values.filter((value) => value.length > 0);
+}
+function redactExactValues(value, sensitiveValues) {
+    if (sensitiveValues.length === 0)
+        return redactSensitiveValue(value);
+    if (typeof value === "string") {
+        let redacted = value;
+        for (const sensitiveValue of sensitiveValues)
+            redacted = redacted.split(sensitiveValue).join("[REDACTED]");
+        return redactSensitiveText(redacted);
+    }
+    if (Array.isArray(value))
+        return value.map((item) => redactExactValues(item, sensitiveValues));
+    if (!isRecord(value))
+        return value;
+    return redactSensitiveValue(Object.fromEntries(Object.entries(value).map(([key, entryValue]) => [key, redactExactValues(entryValue, sensitiveValues)])));
+}
+export function redactBatchStepErrorData(command, value) {
+    return command?.[0] === "clipboard"
+        ? redactSensitiveValue(redactClipboardPermissionErrorValue({ command: "clipboard", subcommand: command[1] }, value, getClipboardWritePayloadCandidates(command)))
+        : redactExactValues(value, getStatefulCommandSensitiveValues(command));
+}
+function getTypedTextLength(command) {
+    return command?.[0] === "keyboard" && command[1] === "type" && typeof command[2] === "string"
+        ? Array.from(command[2]).length
+        : undefined;
+}
+function getWaitDelayMs(command) {
+    return command?.[0] === "wait" && typeof command[1] === "string" && /^\d+$/.test(command[1]) ? command[1] : undefined;
+}
+function formatBatchStepDetails(details, presentation) {
+    const inlineImageCount = getPresentationImages(presentation).length;
+    const status = details.success ? "succeeded" : "failed";
+    const lines = [`Step ${details.index + 1} — ${details.commandText} (${status})`];
+    if (details.text.length > 0)
+        lines.push(details.text);
+    if (inlineImageCount > 0)
+        lines.push(`(${inlineImageCount} inline image attachment${inlineImageCount === 1 ? "" : "s"} below)`);
+    return lines.join("\n");
+}
+function formatTypedSequenceSummary(steps, startIndex) {
+    let index = startIndex;
+    const firstDetails = steps[index]?.details;
+    if (!firstDetails?.success)
+        return undefined;
+    let target;
+    if (firstDetails.command?.[0] === "focus" && typeof firstDetails.command[1] === "string") {
+        target = firstDetails.command[1];
+        index += 1;
+    }
+    let typedCharCount = 0;
+    let typedStepCount = 0;
+    let delayMs;
+    while (index < steps.length) {
+        const details = steps[index]?.details;
+        if (!details?.success)
+            break;
+        const typedLength = getTypedTextLength(details.command);
+        if (typedLength === undefined)
+            break;
+        typedCharCount += typedLength;
+        typedStepCount += 1;
+        index += 1;
+        const nextDelay = getWaitDelayMs(steps[index]?.details.command);
+        const followingTypedLength = getTypedTextLength(steps[index + 1]?.details.command);
+        if (nextDelay !== undefined && followingTypedLength !== undefined && steps[index]?.details.success && steps[index + 1]?.details.success) {
+            if (delayMs !== undefined && delayMs !== nextDelay)
+                return undefined;
+            delayMs = nextDelay;
+            index += 1;
+        }
+    }
+    if (typedStepCount < 2)
+        return undefined;
+    let pressedKey;
+    const pressDetails = steps[index]?.details;
+    if (pressDetails?.success && pressDetails.command?.[0] === "press" && typeof pressDetails.command[1] === "string") {
+        pressedKey = pressDetails.command[1];
+        index += 1;
+    }
+    const firstStep = firstDetails.index + 1;
+    const lastStep = steps[index - 1]?.details.index + 1;
+    const stepRange = lastStep && lastStep > firstStep ? `${firstStep}-${lastStep}` : String(firstStep);
+    const commandLabel = target ? `type ${target}` : "keyboard type";
+    const lines = [
+        `Step ${stepRange} — ${commandLabel} (succeeded)`,
+        `Typed ${typedCharCount} char${typedCharCount === 1 ? "" : "s"}${delayMs ? ` with delayMs=${delayMs}` : ""}.`,
+    ];
+    if (pressedKey)
+        lines.push(`Pressed ${pressedKey}.`);
+    return { nextIndex: index, text: lines.join("\n") };
+}
+function formatBatchStepsText(steps) {
+    if (steps.length === 0)
+        return "(no batch steps)";
+    const lines = [];
+    for (let index = 0; index < steps.length;) {
+        const typedSequence = formatTypedSequenceSummary(steps, index);
+        if (typedSequence) {
+            lines.push(typedSequence.text);
+            index = typedSequence.nextIndex;
+            continue;
+        }
+        const step = steps[index];
+        if (step)
+            lines.push(formatBatchStepDetails(step.details, step.presentation));
+        index += 1;
+    }
+    return lines.join("\n\n");
+}
+async function buildBatchStepPresentation(options) {
+    const { artifactManifest, artifactMaxUpdatedAtMs, artifactMinUpdatedAtMs, artifactRequest, buildNestedToolPresentation, cwd, index, item, namespace, networkRoutes, persistentArtifactStore, sessionName } = options;
+    const command = isStringArray(item.command) ? item.command : undefined;
+    const redactedCommand = command ? redactInvocationArgs(command) : undefined;
+    const commandText = formatBatchStepCommand(hasModelFacingArgRedaction(redactedCommand) ? redactedCommand : command, index);
+    const lifecycle = extractAgentBrowserLifecycle(item.result);
+    if (item.success === false && command?.[0] !== "record") {
+        const redactedErrorData = redactBatchStepErrorData(command, item.error);
+        const errorText = formatBatchStepError(redactedErrorData);
+        const failureCategory = classifyAgentBrowserFailureCategory({
+            args: command,
+            command: command?.[0],
+            errorText,
+        });
+        const confirmationRequired = detectConfirmationRequired(item.error);
+        const nextActions = applyNamespaceToNextActions(mergePresentationNextActions(isWaitTextAssertionCommand(command) ? [buildWaitTextAssertionFailureNextAction(sessionName)] : undefined, buildAgentBrowserNextActions({
+            args: command,
+            command: command?.[0],
+            confirmationId: confirmationRequired?.id,
+            failureCategory,
+            overlayBlockedClick: isOverlayBlockedClickError(command?.[0], errorText, command),
+            resultCategory: "failure",
+            sessionName,
+            subcommand: command?.[1],
+        })), namespace);
+        const presentation = {
+            content: [{ type: "text", text: errorText }],
+            failureCategory,
+            nextActions,
+            resultCategory: "failure",
+            summary: errorText,
+        };
+        return {
+            details: {
+                artifactVerification: presentation.artifactVerification,
+                artifacts: presentation.artifacts,
+                command: redactedCommand,
+                commandText,
+                data: redactedErrorData,
+                failureCategory,
+                index,
+                lifecycle,
+                nextActions,
+                resultCategory: "failure",
+                success: false,
+                summary: errorText,
+                text: errorText,
+            },
+            presentation,
+        };
+    }
+    const commandInfo = parseCommandInfo(command ?? []);
+    const commandInfoWithTokens = command ? { ...commandInfo, commandTokens: command } : commandInfo;
+    const networkRouteDiagnostics = commandInfo.command === "network" && commandInfo.subcommand === "requests"
+        ? buildNetworkRouteDiagnostics(item.result, networkRoutes)
+        : undefined;
+    const snapshotStepFilter = parseSnapshotStepFilter(command);
+    const snapshotStepFiltered = snapshotStepFilter ? applySnapshotStepFilter(item.result, snapshotStepFilter) : undefined;
+    const presentation = await buildNestedToolPresentation({
+        artifactManifest,
+        artifactMaxUpdatedAtMs,
+        artifactMinUpdatedAtMs,
+        artifactRequest,
+        commandInfo: commandInfoWithTokens,
+        cwd,
+        args: command,
+        envelope: { data: snapshotStepFiltered?.data ?? item.result, success: item.success !== false, error: item.error },
+        errorText: item.success === false ? formatBatchStepError(redactBatchStepErrorData(command, item.error)) : undefined,
+        piCleanupOwnership: options.piCleanupOwnership,
+        networkRouteDiagnostics,
+        namespace,
+        persistentArtifactStore,
+        sessionName,
+    });
+    const fullOutputPaths = getPresentationPaths({
+        primaryPath: presentation.fullOutputPath,
+        secondaryPaths: presentation.fullOutputPaths,
+    });
+    if (snapshotStepFiltered) {
+        const filterSummary = formatSnapshotStepFilterSummary(snapshotStepFiltered, snapshotStepFilter);
+        if (presentation.content[0]?.type === "text")
+            presentation.content[0] = { ...presentation.content[0], text: `${filterSummary}\n\n${presentation.content[0].text}` };
+        else
+            presentation.content = [{ type: "text", text: filterSummary }, ...presentation.content];
+    }
+    const imagePaths = getPresentationPaths({
+        primaryPath: presentation.imagePath,
+        secondaryPaths: presentation.imagePaths,
+    });
+    const text = getPresentationText(presentation) || presentation.summary;
+    const stepSucceeded = presentation.resultCategory !== "failure";
+    const pendingWebMcpMutation = stepSucceeded
+        && commandInfo.command === "webmcp"
+        && ["invoke", "result"].includes(commandInfo.subcommand ?? "")
+        && isRecord(presentation.data)
+        && presentation.data.status === "pending";
+    const nextActions = applyNamespaceToNextActions(pendingWebMcpMutation ? buildPendingWebMcpNextActions(sessionName) : presentation.nextActions ?? buildAgentBrowserNextActions({
+        artifacts: presentation.artifacts,
+        args: command,
+        command: command?.[0],
+        failureCategory: presentation.failureCategory,
+        resultCategory: stepSucceeded ? "success" : "failure",
+        savedFilePath: presentation.savedFilePath,
+        sessionName,
+        subcommand: command?.[1],
+        successCategory: presentation.successCategory,
+    }), namespace);
+    const pageChangeSummary = buildPageChangeSummary({
+        artifacts: presentation.artifacts,
+        commandInfo: commandInfoWithTokens,
+        data: presentation.data,
+        nextActions,
+        savedFilePath: presentation.savedFilePath,
+        summary: presentation.summary,
+    });
+    return {
+        details: {
+            artifactVerification: presentation.artifactVerification,
+            artifacts: presentation.artifacts,
+            command: redactedCommand,
+            commandText,
+            data: presentation.data,
+            snapshotFilter: snapshotStepFiltered ? {
+                matchedRefs: snapshotStepFiltered.matchedRefs,
+                role: snapshotStepFiltered.role,
+                search: snapshotStepFiltered.search,
+                totalLines: snapshotStepFiltered.totalLines,
+                totalRefs: snapshotStepFiltered.totalRefs,
+                visibleLines: snapshotStepFiltered.visibleLines,
+            } : undefined,
+            failureCategory: stepSucceeded ? undefined : presentation.failureCategory,
+            fullOutputPath: fullOutputPaths[0],
+            fullOutputPaths: fullOutputPaths.length > 0 ? fullOutputPaths : undefined,
+            imagePath: imagePaths[0],
+            imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+            index,
+            lifecycle,
+            networkRouteDiagnostics: presentation.networkRouteDiagnostics,
+            nextActions,
+            pageChangeSummary,
+            resultCategory: stepSucceeded ? "success" : "failure",
+            savedFile: presentation.savedFile,
+            savedFilePath: presentation.savedFilePath,
+            success: stepSucceeded,
+            successCategory: stepSucceeded ? classifyPresentationSuccessCategory({ artifactVerification: presentation.artifactVerification, artifacts: presentation.artifacts, savedFile: presentation.savedFile }) : undefined,
+            summary: presentation.summary,
+            text,
+        },
+        presentation,
+    };
+}
+async function abandonedRecordingArtifact(artifact) {
+    const { recordingState: _recordingState, willExistOnStop: _willExistOnStop, ...terminal } = artifact;
+    try {
+        const file = await stat(artifact.absolutePath);
+        return { ...terminal, exists: file.isFile(), sizeBytes: file.size, status: file.isFile() ? "unverified" : "missing", subcommand: "close-abandoned" };
+    }
+    catch (error) {
+        const missing = error.code === "ENOENT";
+        return { ...terminal, exists: missing ? false : undefined, status: missing ? "missing" : "unverified", subcommand: "close-abandoned" };
+    }
+}
+async function coalesceTerminalBatchRecordingArtifacts(steps, sessionName, namespace) {
+    const artifacts = [];
+    const pendingIndexesBySession = new Map();
+    const removedPendingIndexes = new Set();
+    for (const step of steps) {
+        for (const artifact of step.presentation.artifacts ?? []) {
+            const index = artifacts.push(artifact) - 1;
+            if (artifact.command !== "record" || artifact.kind !== "video")
+                continue;
+            const session = artifact.session ? getAgentBrowserSessionIdentityKey(artifact.session, artifact.namespace) : "";
+            if (isPendingRecordingArtifact(artifact)) {
+                const pendingIndexes = pendingIndexesBySession.get(session) ?? [];
+                pendingIndexes.push(index);
+                pendingIndexesBySession.set(session, pendingIndexes);
+                continue;
+            }
+            const pendingIndex = pendingIndexesBySession.get(session)?.pop();
+            if (pendingIndex !== undefined)
+                removedPendingIndexes.add(pendingIndex);
+        }
+        const command = step.details.command;
+        if (step.details.success !== true || !command || !isCloseCommand(extractUpstreamCommandTokens(command)[0]))
+            continue;
+        const session = sessionName ? getAgentBrowserSessionIdentityKey(sessionName, namespace) : "";
+        for (const pendingIndex of pendingIndexesBySession.get(session) ?? []) {
+            const pending = artifacts[pendingIndex];
+            if (pending && !removedPendingIndexes.has(pendingIndex))
+                artifacts[pendingIndex] = await abandonedRecordingArtifact(pending);
+        }
+    }
+    return artifacts.filter((_, index) => !removedPendingIndexes.has(index));
+}
+export async function buildBatchPresentation(options) {
+    const { artifactRequests, buildNestedToolPresentation, cwd, data, namespace, networkRoutes, persistentArtifactStore, sessionName, summary } = options;
+    const steps = [];
+    const protectedPersistentPaths = [];
+    let currentArtifactManifest = options.artifactManifest;
+    let currentNetworkRoutes = networkRoutes;
+    for (const [index, item] of data.entries()) {
+        const step = await buildBatchStepPresentation({
+            artifactManifest: currentArtifactManifest,
+            artifactMaxUpdatedAtMs: options.artifactMaxUpdatedAtMs,
+            artifactMinUpdatedAtMs: options.artifactMinUpdatedAtMs,
+            artifactRequest: artifactRequests?.[index],
+            buildNestedToolPresentation,
+            cwd,
+            index,
+            item,
+            piCleanupOwnership: options.piCleanupOwnership,
+            namespace,
+            networkRoutes: currentNetworkRoutes,
+            persistentArtifactStore: persistentArtifactStore ? { ...persistentArtifactStore, protectedPaths: protectedPersistentPaths } : undefined,
+            sessionName,
+        });
+        steps.push(step);
+        currentArtifactManifest = step.presentation.artifactManifest ?? currentArtifactManifest;
+        currentNetworkRoutes = applyNetworkRouteRecords(currentNetworkRoutes, isStringArray(item.command) ? extractUpstreamCommandTokens(item.command) : undefined, item.success !== false && step.details.success);
+        protectedPersistentPaths.push(...getPresentationPaths({
+            primaryPath: step.presentation.fullOutputPath,
+            secondaryPaths: step.presentation.fullOutputPaths,
+        }));
+    }
+    const batchFailure = getBatchFailureDetails(steps);
+    const images = steps.flatMap((step) => getPresentationImages(step.presentation));
+    const artifacts = await coalesceTerminalBatchRecordingArtifacts(steps, sessionName, namespace);
+    const artifactVerification = buildArtifactVerificationSummary(artifacts);
+    const fullOutputPaths = steps.flatMap((step) => getPresentationPaths({
+        primaryPath: step.presentation.fullOutputPath,
+        secondaryPaths: step.presentation.fullOutputPaths,
+    }));
+    const imagePaths = steps.flatMap((step) => getPresentationPaths({
+        primaryPath: step.presentation.imagePath,
+        secondaryPaths: step.presentation.imagePaths,
+    }));
+    const redactedBatchData = steps.map(({ details }) => (details.success
+        ? { command: details.command, result: details.data, success: true }
+        : { command: details.command, error: details.text, ...(details.command?.[0] === "record" ? { result: details.data } : {}), success: false }));
+    const unverifiedMutationCount = steps.filter((step) => step.details.pageChangeSummary?.changeType === "mutation" && step.details.pageChangeSummary.observed === false).length;
+    const mutationEvidenceText = unverifiedMutationCount > 0
+        ? `Mutation evidence: ${unverifiedMutationCount} action result${unverifiedMutationCount === 1 ? " proves" : "s prove"} dispatch only, not application state change. Use explicit later assertions or external receipts as postconditions; fixed waits are not postconditions.`
+        : undefined;
+    const stepText = formatBatchStepsText(steps);
+    const batchSummary = batchFailure === undefined
+        ? summary
+        : `Batch failed: ${batchFailure.successCount}/${batchFailure.totalCount} succeeded`;
+    const failureHeader = batchFailure === undefined
+        ? undefined
+        : [
+            batchSummary,
+            `First failing step: ${batchFailure.failedStep.index + 1} — ${batchFailure.failedStep.commandText}`,
+            batchFailure.failureCount > 1 ? `${batchFailure.failureCount} steps failed. See the per-step results below.` : "See the per-step results below.",
+        ].join("\n");
+    const text = [failureHeader, mutationEvidenceText, stepText].filter((line) => line !== undefined).join("\n\n");
+    const artifactRetentionSummary = currentArtifactManifest ? formatSessionArtifactRetentionSummary(currentArtifactManifest) : undefined;
+    const contentText = artifactRetentionSummary && manifestHasNewNoticeWorthyEntries(options.artifactManifest, currentArtifactManifest)
+        ? `${text}\n\n${artifactRetentionSummary}`
+        : text;
+    const artifactLifecycleActions = applyNamespaceToNextActions(buildAgentBrowserNextActions({ artifacts, command: "batch", resultCategory: batchFailure ? "failure" : "success", sessionName }), namespace);
+    const nextActions = batchFailure
+        ? appendUniqueAgentBrowserNextActions([...(batchFailure.failedStep.nextActions ?? [])], artifactLifecycleActions)
+        : artifactLifecycleActions;
+    const changedSteps = steps.map((step) => step.details).filter((details) => details.pageChangeSummary !== undefined);
+    const observedChangeCount = changedSteps.filter((details) => details.pageChangeSummary?.observed === true).length;
+    const pageChangeSummary = artifacts.length > 0
+        ? buildPageChangeSummary({
+            artifacts,
+            commandInfo: { command: "batch" },
+            data,
+            nextActions,
+            summary: batchSummary,
+        })
+        : changedSteps.length > 0
+            ? {
+                changeType: "mutation",
+                command: "batch",
+                nextActionIds: nextActions?.map((action) => action.id),
+                observed: observedChangeCount > 0,
+                summary: observedChangeCount > 0
+                    ? `batch → ${observedChangeCount} observed change${observedChangeCount === 1 ? "" : "s"}${unverifiedMutationCount > 0 ? `; ${unverifiedMutationCount} dispatched action${unverifiedMutationCount === 1 ? "" : "s"} unverified` : ""}`
+                    : `batch → ${unverifiedMutationCount} action${unverifiedMutationCount === 1 ? "" : "s"} dispatched → application change unverified`,
+            }
+            : undefined;
+    return {
+        artifactManifest: currentArtifactManifest,
+        artifactRetentionSummary,
+        artifactVerification,
+        artifacts: artifacts.length > 0 ? artifacts : undefined,
+        batchFailure,
+        batchSteps: steps.map((step) => step.details),
+        content: [{ type: "text", text: contentText }, ...images],
+        failureCategory: batchFailure?.failedStep.failureCategory,
+        data: redactedBatchData,
+        fullOutputPath: fullOutputPaths[0],
+        fullOutputPaths: fullOutputPaths.length > 0 ? fullOutputPaths : undefined,
+        imagePath: imagePaths[0],
+        imagePaths: imagePaths.length > 0 ? imagePaths : undefined,
+        nextActions,
+        pageChangeSummary,
+        resultCategory: batchFailure ? "failure" : "success",
+        successCategory: batchFailure ? undefined : classifyPresentationSuccessCategory({ artifactVerification, artifacts }),
+        summary: batchSummary,
+    };
+}
