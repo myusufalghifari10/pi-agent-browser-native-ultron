@@ -11,7 +11,7 @@ import { pathExists } from "../../fs-utils.js";
 import { getCompiledSemanticActionSessionPrefix } from "../../input-modes/semantic-action.js";
 // local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7).
 import { resolveCheckpointGateDecision } from "../../input-modes/checkpoint.js";
-import { decryptCheckpoint, describeCheckpointEnvelope, getCheckpointTtlDays, isCheckpointExpired, listCheckpoints, readCheckpoint, reapStaleCheckpointTempFiles, writeCheckpointTempFile } from "../../vault/checkpoint-store.js";
+import { buildRestoreBatchRows, decryptCheckpoint, describeCheckpointEnvelope, getCheckpointTtlDays, isCheckpointExpired, listCheckpoints, readCheckpoint, reapStaleCheckpointTempFiles, writeCheckpointTempFile } from "../../vault/checkpoint-store.js";
 import { registerVaultSecret } from "../../vault/secret-registry.js";
 import { tryDirectAnchorDownload } from "./prepare/direct-anchor-download.js";
 import { tryNetworkRequestsPageFilter } from "./prepare/network-page-filter.js";
@@ -510,6 +510,23 @@ async function tryCheckpointPreSpawnGate(options) {
     const writeError = writeCheckpointTempFile(compiled.tempPath, decrypted.bytes);
     if (writeError) {
         return buildCheckpointGateFailure(options.redactedArgs, writeError, "validation-error");
+    }
+    // wave4 (live-sweep W-V1): see buildRestoreBatchRows — navigate to the saved origin/url between
+    // the state load and the health-check snapshot. The envelope metadata is only known after the
+    // decrypt above, so this is the first point where the restore target exists.
+    const checkpointMetadata = decrypted.metadata ?? {};
+    const restoreTarget = typeof checkpointMetadata.url === "string" && checkpointMetadata.url.length > 0
+        ? checkpointMetadata.url
+        : typeof checkpointMetadata.origin === "string" && checkpointMetadata.origin.length > 0 ? checkpointMetadata.origin : undefined;
+    if (restoreTarget && typeof compiled.stdin === "string") {
+        try {
+            const rows = buildRestoreBatchRows(JSON.parse(compiled.stdin), restoreTarget);
+            if (rows)
+                compiled.stdin = JSON.stringify(rows);
+        }
+        catch {
+            // Leave the compiled batch untouched; the restore still attempts as compiled.
+        }
     }
     return undefined;
 }

@@ -199,7 +199,7 @@ const SAVED_ID = (() => {
     assert.deepEqual(compiledSaveWithSession.args.slice(0, 2), ["--session", "ultron1"]);
     const compiledRestore = compileCheckpointRun({ action: "restore", id: SAVED_ID });
     assert.deepEqual(compiledRestore.args, ["--session", checkpointSessionNameForId(SAVED_ID), "batch", "--bail"], "restore compiles to a fail-fast batch in the fresh session");
-    assert.deepEqual(JSON.parse(compiledRestore.stdin), [["state", "load", compiledRestore.tempPath], ["snapshot"]], "restore batch is state load + health-check snapshot");
+    assert.deepEqual(JSON.parse(compiledRestore.stdin), [["state", "load", compiledRestore.tempPath], ["get", "url"], ["snapshot"]], "restore batch is state load + get url (page-target validator requires it after a state-load transition) + health-check snapshot");
     assert.equal(compiledRestore.tempPath, JSON.parse(compiledRestore.stdin)[0][2], "load row uses the pre-named temp path");
     assert.deepEqual(compileCheckpointRun({ action: "list" }).args, [], "list compiles to no argv (host-side)");
 

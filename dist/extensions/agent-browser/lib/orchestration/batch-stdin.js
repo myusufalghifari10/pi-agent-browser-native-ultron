@@ -92,8 +92,13 @@ export function parseBatchStdinJsonArray(stdin) {
     if (stdin === undefined) {
         return { steps: [] };
     }
+    let parsed;
     try {
-        const parsed = JSON.parse(stdin);
+        // wave4 (live-sweep W-A1): P28 prepareArguments de-stringifies a JSON-string stdin into a
+        // real array before this point, so a plain JSON.parse here coerced that array back to a
+        // comma-joined string ("click,x,get,url") and failed with a baffling parse error. Accept
+        // both the documented JSON-string form and the already-parsed array form.
+        parsed = typeof stdin === "string" ? JSON.parse(stdin) : stdin;
         if (!Array.isArray(parsed)) {
             return { error: `agent_browser batch stdin must be a JSON array of command steps.${BATCH_STDIN_EXAMPLE}` };
         }

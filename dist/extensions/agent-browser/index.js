@@ -1381,6 +1381,14 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
                     } catch {}
                 }
             }
+            // wave4 (live-sweep W-N1): some providers stringify numeric companion params, so a
+            // JSON-numeric "20000" reached the timeoutMs validation as a string and failed with
+            // "timeoutMs must be a positive integer when provided" even though the caller sent a
+            // valid integer. De-stringify a finite numeric string before validation; non-numeric
+            // strings are left untouched so the existing validation error still fires for them.
+            if (typeof out.timeoutMs === "string" && out.timeoutMs.trim() !== "" && Number.isFinite(Number(out.timeoutMs))) {
+                out.timeoutMs = Number(out.timeoutMs);
+            }
             for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
                 const value = out[key];
                 if (typeof value === "string") {

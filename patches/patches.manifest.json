@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "f4cd2039545433fc57904dd9d712215ca4e60425a51eb0ac20f77877fe3023c8"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "1815c5265c69d4c1c9840c2013141dcc8e21adec8a9e4587ff358a2db0e5b85a"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -40,7 +40,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "e088ff1b1c87f07cf161a66c0bf27b7a2b81705384741c177c27698f7ca7be46"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "400b3f0feb25f75f3a676c0fa483cdfe32f384ec9857cc999a7afcb01a27b9cc"
       },
       "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding \u2192 Missing 'path' parameter; path-like operand \u2192 Invalid session name)."
     },
@@ -147,7 +147,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "c63766602d9e026a06cb3ba37c8f14c8246babe858032c8924027cf421068485"
+        "dist/extensions/agent-browser/index.js": "ec9adbb16d74d043bd370a4e49c1bb561f906e282d415937e4e24168e1460d7f"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage \u2014 current shape maintained in playbook.js, see PATCHES.md)."
     },
@@ -162,7 +162,7 @@
       ],
       "sha256": {
         "dist/extensions/agent-browser/lib/patches-ledger.js": "c1e09afe44ed9ec41bd5cef7f09591df2f3f7bee0b00e352515e6007bd86475c",
-        "dist/extensions/agent-browser/lib/process.js": "c2cd79539893f701cd462e136c97c2abb02b5303c15134c4fc440ad1c817667d"
+        "dist/extensions/agent-browser/lib/process.js": "ac976a2f61bc578fca2152265d1cd46fd5626545f96a5e4dff379feaaca55267"
       },
       "upstreamDefect": "No structural guard existed against local-patch clobbering: an update could overwrite the 28 hand-applied patches and the wrapper would keep spawning silently (pre-spawn verifyPatchLedger gate)."
     }

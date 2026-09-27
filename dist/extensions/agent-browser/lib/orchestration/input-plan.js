@@ -131,6 +131,32 @@ function getDiffSnapshotBaselineError(commandTokens, stdin) {
     }
     return undefined;
 }
+// local patch (wave4 live-sweep W-N2): upstream `tab` has no "select" subcommand — `tab select t1`
+// is parsed as `tab <label="select">` and fails with "No tab with label `select`", teaching nothing.
+// An agent following its intuition hits this exact dead end (observed live twice). Reject it early
+// with the real grammar instead of letting the opaque upstream error through.
+const TAB_SELECT_GRAMMAR_MESSAGE = [
+    "agent-browser has no `tab select` subcommand: tabs are selected directly by label.",
+    "Run `tab list` to see labels, then select with a bare label — {\"args\":[\"tab\",\"t1\"]} — or scope one command with the `--tab <label>` flag.",
+].join(" ");
+function isTabSelectStep(step) {
+    return Array.isArray(step) && step[0] === "tab" && step[1] === "select";
+}
+function getTabSelectGrammarError(commandTokens, stdin) {
+    if (!Array.isArray(commandTokens) || commandTokens.length === 0)
+        return undefined;
+    const descriptor = parseArgvDescriptor(commandTokens);
+    if (descriptor.commandInfo.command === "tab" && descriptor.commandInfo.subcommand === "select")
+        return TAB_SELECT_GRAMMAR_MESSAGE;
+    if (descriptor.commandInfo.command !== "batch")
+        return undefined;
+    const steps = getUpstreamEffectiveBatchSteps(descriptor.commandTokens, stdin);
+    for (let index = 0; index < steps.length; index += 1) {
+        if (isTabSelectStep(steps[index]))
+            return `${TAB_SELECT_GRAMMAR_MESSAGE} (Blocked batch step ${index + 1}.)`;
+    }
+    return undefined;
+}
 function getStateClearBlockError(commandTokens, stdin) {
     if (!Array.isArray(commandTokens) || commandTokens.length === 0)
         return undefined;
@@ -279,7 +305,7 @@ export function resolveAgentBrowserInput(options) {
         // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
         // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
         // validated by normalizeCheckpointInput above.
-        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }

@@ -183,12 +183,15 @@ export function compileCheckpointRun(plan) {
             tempPath,
         };
     }
-    // Restore lands in a dedicated fresh session whose name is derived from the id, and the
-    // post-restore health check (snapshot) runs in the same fail-fast batch.
+    // Restore lands in a dedicated fresh session whose name is derived from the id. `get url` sits
+    // between the load and the snapshot because the wrapper's page-target validator refuses
+    // page-content inspection directly after a state-load transition (wave4 live-sweep W-V1); the
+    // pre-spawn gate additionally injects the `open <origin>` row after decryption (see
+    // buildRestoreBatchRows) so the snapshot health-checks a real page of the restored origin.
     return {
         args: ["--session", checkpointSessionNameForId(plan.id), "batch", "--bail"],
         plan,
-        stdin: JSON.stringify([["state", "load", tempPath], ["snapshot"]]),
+        stdin: JSON.stringify([["state", "load", tempPath], ["get", "url"], ["snapshot"]]),
         tempPath,
     };
 }

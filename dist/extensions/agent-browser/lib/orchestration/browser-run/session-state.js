@@ -482,6 +482,18 @@ function selectAnySessionTargetTab(options) {
     const selection = selectedTab ? getTabSelection(selectedTab) : undefined;
     return selection ? { ...selection, ...(targetTitle ? { targetTitle } : {}), targetUrl } : undefined;
 }
+// wave4 (live-sweep W-N3): pure decision for the extinct-target case — the active page to follow
+// when no tab matches the tracked URL, or undefined when there is nothing sane to follow.
+export function resolveExtinctTargetFollowTab(tabs) {
+    const activeTab = (Array.isArray(tabs) ? tabs : []).find((tab) => isRecord(tab) && tab.active === true);
+    if (!activeTab)
+        return undefined;
+    const activeUrl = normalizeComparableUrl(typeof activeTab.url === "string" ? activeTab.url : "");
+    if (!activeUrl || isAboutBlankUrl(activeTab.url ?? ""))
+        return undefined;
+    const selection = getTabSelection(activeTab);
+    return selection ? { ...selection, targetUrl: activeUrl, extinctTargetFollowed: true } : undefined;
+}
 export async function runSessionCommandData(options) {
     const { args, cwd, env, namespace, pinNamespace, sessionName, signal, stdin, throwOnFailure, timeoutMs } = options;
     if (!sessionName)
@@ -563,9 +575,20 @@ export async function ensureSessionTabTarget(options) {
     const tabs = await readTabs();
     const active = tabs?.find((tab) => tab.active);
     const correction = tabs && selectAnySessionTargetTab({ tabs, target: options.target });
-    const error = "agent-browser could not re-select and verify the intended tab before running the command. Run tab list and select the intended tab, then snapshot -i before retrying.";
-    if (!correction)
+    const error = "agent-browser could not re-select and verify the intended tab before running the command. Run tab list, then select the intended tab with tab <label> (for example [\"tab\",\"t1\"]), then snapshot -i before retrying.";
+    if (!correction) {
+        // wave4 (live-sweep W-N3): the tracked target URL is extinct — no open tab is at that URL
+        // anymore because the tab navigated itself (server redirect chains, SPA handoffs, OIDC
+        // callbacks). Previously this returned the drift error unconditionally and the caller
+        // looped forever: tab list never heals a dead target and only the undiscoverable
+        // `tab <label>` command did. The only sane continuation is the active page — follow it and
+        // let this run's observed target re-record the tracked state. Refs stay protected by the
+        // separate ref-snapshot invalidation machinery (URL change ⇒ stale refs).
+        const follow = resolveExtinctTargetFollowTab(tabs);
+        if (follow)
+            return { correction: follow };
         return { error };
+    }
     // Native tab selection clears refs and frame scope even when selecting the current tab.
     if (active && getTabSelection(active)?.selectedTab === correction.selectedTab)
         return {};

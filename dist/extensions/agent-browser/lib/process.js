@@ -555,7 +555,12 @@ export async function runAgentBrowserProcess(options) {
             }
             try {
                 if (stdin) {
-                    child.stdin.write(stdin);
+                    // wave4 (live-sweep W-A1): P28 de-stringifies JSON-string params, so stdin can
+                    // arrive as a real array/object. child.stdin.write only accepts strings and
+                    // buffers — serialize structured payloads back to JSON at the single spawn site
+                    // instead of throwing "The \"chunk\" argument must be of type string".
+                    const stdinPayload = typeof stdin === "string" ? stdin : JSON.stringify(stdin);
+                    child.stdin.write(stdinPayload);
                 }
                 child.stdin.end();
             }

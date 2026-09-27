@@ -223,6 +223,22 @@ export function decryptCheckpoint(id, { env = process.env } = {}) {
     return { status: "ok", bytes: decrypted.bytes, metadata: read.envelope.metadata };
 }
 
+/**
+ * wave4 (live-sweep W-V1): pure row injection for restore batches. Upstream `state load` restores
+ * storage but opens no page, so the compiled [state load, snapshot] batch hit the wrapper's own
+ * post-transition guard ("active page became unverified after a state-load transition") and every
+ * restore failed. Insert the navigation to the saved origin/url between the load and the
+ * health-check snapshot so the snapshot verifies a real page of the restored origin.
+ */
+export function buildRestoreBatchRows(rows, restoreTarget) {
+    if (!Array.isArray(rows) || typeof restoreTarget !== "string" || restoreTarget.length === 0)
+        return undefined;
+    const loadIndex = rows.findIndex((row) => Array.isArray(row) && row[0] === "state" && row[1] === "load");
+    if (loadIndex === -1)
+        return undefined;
+    return [...rows.slice(0, loadIndex + 1), ["open", restoreTarget], ...rows.slice(loadIndex + 1)];
+}
+
 /** List saved snapshots as metadata only. Corrupt/unreadable files are counted, never decrypted. */
 export function listCheckpoints({ env = process.env, nowMs = Date.now() } = {}) {
     const securityError = getCheckpointStorageSecurityError(env);
