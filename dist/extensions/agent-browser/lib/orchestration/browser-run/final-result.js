@@ -89,6 +89,18 @@ export function redactRecoveryHint(recoveryHint) {
     const exampleArgs = redactInvocationArgs(recoveryHint.exampleArgs);
     return { ...recoveryHint, exampleArgs, exampleParams: { ...recoveryHint.exampleParams, args: exampleArgs } };
 }
+export function redactParseableJsonText(text) {
+    // FINAL-DESIGN §5.3 (caller --json redaction hole): JSON content requested via caller --json skips
+    // the prose-level redactSensitiveText pass, so the heuristic ladder must run structure-preserving:
+    // walk parsed values with redactSensitiveValue (keys stay intact, values are filtered), then
+    // re-serialize parseable. Input that does not parse is returned unchanged.
+    try {
+        return JSON.stringify(redactSensitiveValue(JSON.parse(text)), null, 2);
+    }
+    catch {
+        return text;
+    }
+}
 export function buildJsonVisibleContent(options) {
     const { error, presentation, succeeded, warnings } = options;
     const payload = redactSensitiveValue({ artifacts: presentation.artifacts, data: presentation.data, error, recordingRecovery: presentation.recordingRecovery, readConfirmation: presentation.readConfirmation, success: succeeded, warnings: warnings && warnings.length > 0 ? warnings : undefined });
@@ -181,7 +193,9 @@ export function buildRedactedPresentationContent(options) {
         if (item.type !== "text")
             return item;
         const exactRedactedText = redactExactSensitiveText(item.text, exactSensitiveValues);
-        return userRequestedJson && !plainTextInspection ? { ...item, text: exactRedactedText } : { ...item, text: redactSensitiveText(exactRedactedText) };
+        // FINAL-DESIGN §5.3: caller-requested --json content bypasses the prose pass (redactSensitiveText),
+        // so heuristics run structure-preserving here (redactParseableJsonText) instead of being skipped.
+        return userRequestedJson && !plainTextInspection ? { ...item, text: redactParseableJsonText(exactRedactedText) } : { ...item, text: redactSensitiveText(exactRedactedText) };
     });
 }
 export async function prepareFinalResultRecoveryState(options) {
@@ -402,6 +416,24 @@ function formatSettleReportText(report) {
 function formatSettleRetryText(options) {
     return typeof options.settleRetryNote === "string" && options.settleRetryNote.length > 0 ? options.settleRetryNote : undefined;
 }
+// FINAL-DESIGN.md pillar A reshape item 2 (§5 step 4): one compact receipts line for job-mode
+// verification probes; structured evidence lives in details.jobReceipts. Additive evidence only —
+// never a license for blind execution (the settle-retry ladder stays the recovery path).
+function formatJobReceiptsText(receipts, hasStepEvidence = true) {
+    if (!Array.isArray(receipts) || receipts.length === 0)
+        return undefined;
+    const passedCount = receipts.filter((receipt) => receipt.result === "pass").length;
+    const failed = receipts.filter((receipt) => receipt.result === "fail");
+    const skipped = receipts.filter((receipt) => receipt.result === "skipped");
+    const parts = [`Job receipts: ${passedCount}/${receipts.length} probe${receipts.length === 1 ? "" : "s"} passed`];
+    if (failed.length > 0)
+        parts.push(`${failed.length} failed: ${failed.map((receipt) => `step ${receipt.index + 1} ${receipt.probe?.type} ${JSON.stringify(receipt.probe?.value ?? "")}`).join("; ")} (a failed probe is a failed batch step under --bail and fails the job)`);
+    if (skipped.length > 0)
+        parts.push(hasStepEvidence
+            ? `${skipped.length} skipped: ${skipped.map((receipt) => `step ${receipt.index + 1}`).join(", ")} (not executed — an earlier step failed under --bail or the run ended early)`
+            : `${skipped.length} skipped: ${skipped.map((receipt) => `step ${receipt.index + 1}`).join(", ")} (no per-step evidence available)`);
+    return parts.join("; ");
+}
 function formatNetworkBodyText(result) {
     if (!result || typeof result !== "object") {
         return undefined;
@@ -586,6 +618,7 @@ function buildAgentBrowserResultDetails(options, nextActions) {
         compiledSettle: options.compiledSettle ? { args: options.compiledSettle.args, budget: options.compiledSettle.budget } : undefined,
         compiledVault: options.compiledVault,
         debugReport: options.debugReport,
+        jobReceipts: options.jobReceipts,
         login: options.login,
         networkBody: options.networkBody,
         revealSecrets: options.revealSecretsApplied,
@@ -621,7 +654,7 @@ export function buildFinalAgentBrowserToolResult(options) {
     const readExecutionText = formatReadExecutionText(options, lifecycle);
     const browserWindowText = formatBrowserWindowText(browserWindow);
     const failureNextActionsText = formatFailureNextActionsText(options, nextActions);
-    const rawAppendedDiagnosticText = [formatDebugReportText(options.debugReport), formatSettleReportText(options.settleReport), formatSettleRetryText(options), formatNetworkBodyText(options.networkBody), visibleRefFallbackText, richInputRecoveryText, semanticActionCandidateText, clickDispatchText, overlayBlockerText, fillVerificationText, electronRefFreshnessText, selectorTextVisibilityText, electronBroadGetTextScopeText, scrollNoopDiagnosticText, comboboxFocusDiagnosticText, recordingDependencyWarningText, geolocationStubNoteText, evalStdinHintText, evalResultWarningText, artifactCleanupText, timeoutPartialProgressText, managedSessionOutcomeText, readExecutionText, browserWindowText, failureNextActionsText].filter((item) => item !== undefined).join("\n\n");
+    const rawAppendedDiagnosticText = [formatDebugReportText(options.debugReport), formatSettleReportText(options.settleReport), formatSettleRetryText(options), formatJobReceiptsText(options.jobReceipts, options.presentation?.batchSteps !== undefined), formatNetworkBodyText(options.networkBody), visibleRefFallbackText, richInputRecoveryText, semanticActionCandidateText, clickDispatchText, overlayBlockerText, fillVerificationText, electronRefFreshnessText, selectorTextVisibilityText, electronBroadGetTextScopeText, scrollNoopDiagnosticText, comboboxFocusDiagnosticText, recordingDependencyWarningText, geolocationStubNoteText, evalStdinHintText, evalResultWarningText, artifactCleanupText, timeoutPartialProgressText, managedSessionOutcomeText, readExecutionText, browserWindowText, failureNextActionsText].filter((item) => item !== undefined).join("\n\n");
     const appendedDiagnosticText = redactSensitiveText(redactExactSensitiveText(rawAppendedDiagnosticText, options.exactSensitiveValues));
     // local patch: verbosity gates diagnostic prose only, never structure (PATCHES.md P14).
     const shouldAppendDiagnosticText = appendedDiagnosticText.length > 0 && shouldAppendDiagnosticBlocks(options.verbosity) && (!options.userRequestedJson || options.plainTextInspection);

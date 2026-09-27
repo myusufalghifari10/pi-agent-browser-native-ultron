@@ -53,7 +53,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "c441b141c60a8a8994d0b89e54e4a92ed33f29b94ef3e9ef2b31687dd4d7d4be"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "eb1611c32b2aa7cf39ef23473ba673048d9c24e4f9026d41f46e7b248084c101"
       },
       "upstreamDefect": "set geo <lat> <lon> succeeded but never granted the geolocation permission, so pages always got User denied Geolocation (wrapper stub-install half)."
     },
@@ -66,7 +66,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js": "4a104c30c209f61b30d8bd08d831a257e4354737f7391fe9faa0c333821e1c3c"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js": "68bdd13e0304ca767ecb6b932ae4a624be86b6c39ea75c7ad13bd701efc61f4a"
       },
       "upstreamDefect": "set geo emulation stayed invisible to the caller without a result note carrying the --init-script + sessionMode recipe (note half of P9)."
     },

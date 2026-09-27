@@ -1,14 +1,15 @@
 import { isRecord } from "../../../parsing.js";
 import { buildAgentBrowserResultCategoryDetails } from "../../../results/categories.js";
-import { buildSnapshotPresentation } from "../../../results/snapshot.js";
-import { extractRefSnapshotFromData } from "../../../session-page-state.js";
+import { buildSnapshotPresentation, formatSnapshotSummary } from "../../../results/snapshot.js";
+import { extractRefSnapshotFromData, normalizeComparableUrl } from "../../../session-page-state.js";
 import { redactSensitiveText } from "../../../runtime.js";
 import { collectScrollPositionSnapshot } from "../diagnostics.js";
 import { buildSessionDetailFields, runSessionCommandData } from "../session-state.js";
-function parseSnapshotFilterRequest(commandTokens) {
+export function parseSnapshotFilterRequest(commandTokens) {
     if (commandTokens[0] !== "snapshot")
         return undefined;
     const cleanArgs = [];
+    let deltaArg;
     let role;
     let search;
     for (let index = 0; index < commandTokens.length; index += 1) {
@@ -17,6 +18,19 @@ function parseSnapshotFilterRequest(commandTokens) {
             continue;
         if (token === "--diff")
             continue;
+        if (token === "--delta" || token.startsWith("--delta=")) {
+            if (token === "--delta") {
+                const value = commandTokens[index + 1];
+                if (typeof value === "string" && !value.startsWith("-")) {
+                    deltaArg = value;
+                    index += 1;
+                }
+            }
+            else {
+                deltaArg = token.slice("--delta=".length);
+            }
+            continue;
+        }
         if (token === "--search") {
             const value = commandTokens[index + 1];
             if (typeof value === "string" && !value.startsWith("-")) {
@@ -39,9 +53,7 @@ function parseSnapshotFilterRequest(commandTokens) {
     }
     const viewport = commandTokens.includes("--viewport");
     const diff = commandTokens.includes("--diff");
-    if (!search && !role && !viewport && !diff)
-        return undefined;
-    return { cleanArgs, diff, role, search, viewport };
+    return { cleanArgs, deltaFull: deltaArg === "full", diff, explicitFilter: Boolean(search || role || viewport || diff), hasInteractive: commandTokens.includes("-i"), role, search, viewport };
 }
 const RENDERED_TEXT_SEARCH_MAX_MATCHES = 8;
 function buildRenderedTextSearchEval(search) {
@@ -181,6 +193,56 @@ function buildSnapshotDiff(previous, current) {
             removedRefs.push(refId);
     return { addedRefs, changedRefs, removedRefs, summary: `Snapshot diff: +${addedRefs.length} / -${removedRefs.length} / Δ${changedRefs.length} refs versus previous snapshot.`, unchangedRefs };
 }
+// Delta-snapshot default for large pages (FINAL-DESIGN.md §2.3, §5 step 6): presentation-only.
+// The tracked refSnapshot always stays the FULL new snapshot; only the presented text shrinks.
+const SNAPSHOT_DELTA_MODE_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA";
+const SNAPSHOT_DELTA_MIN_LINES_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES";
+const DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 2000;
+function parseSnapshotDeltaMinLines(value) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_SNAPSHOT_DELTA_MIN_LINES;
+}
+export function resolveSnapshotDeltaPolicy(env = process.env) {
+    const rawMode = env[SNAPSHOT_DELTA_MODE_ENV]?.trim().toLowerCase();
+    const mode = rawMode === "always" ? "always" : rawMode === "never" ? "never" : "auto";
+    return mode === "never" ? undefined : { minLines: parseSnapshotDeltaMinLines(env[SNAPSHOT_DELTA_MIN_LINES_ENV]), mode };
+}
+export function countRenderedSnapshotLines(snapshotText) {
+    return typeof snapshotText === "string" ? snapshotText.split(/\r?\n/).filter((line) => line.length > 0).length : 0;
+}
+export function refSnapshotTargetUrlsMatch(left, right) {
+    const leftUrl = normalizeComparableUrl(left?.url);
+    return leftUrl !== undefined && leftUrl === normalizeComparableUrl(right?.url);
+}
+export function hasTrackedRefSnapshot(refSnapshot) {
+    return isRecord(refSnapshot?.refs) && Object.keys(refSnapshot.refs).length > 0;
+}
+export function decideSnapshotDeltaPresentation({ deltaFull, hasPrior, policy, renderedLines, sameUrl }) {
+    if (!policy || !hasPrior)
+        return "passthrough";
+    if (!sameUrl || deltaFull)
+        return "full";
+    return policy.mode === "always" || renderedLines > policy.minLines ? "delta" : "full";
+}
+export function buildSnapshotDeltaText({ fullSnapshot, previousRefSnapshot, snapshotData }) {
+    const diff = buildSnapshotDiff(previousRefSnapshot, fullSnapshot);
+    const totalRefs = isRecord(fullSnapshot?.refs) ? Object.keys(fullSnapshot.refs).length : 0;
+    const changedLineRefIds = new Set([...(diff?.addedRefs ?? []), ...(diff?.changedRefs ?? [])]);
+    const removedRefIds = diff?.removedRefs ?? [];
+    const changedRefs = changedLineRefIds.size + removedRefIds.length;
+    const lines = [`Delta snapshot (vs previous): ${changedRefs} refs changed (${totalRefs} total) — full: run with --delta=full`];
+    if (changedLineRefIds.size > 0) {
+        // ponytail: O(lines × changedRefs) scan, same shape as filterSnapshotData; fine under ~10k lines.
+        const changedLines = (typeof snapshotData?.snapshot === "string" ? snapshotData.snapshot : "")
+            .split(/\r?\n/)
+            .filter((line) => line.length > 0 && [...changedLineRefIds].some((refId) => line.includes(`[ref=${refId}]`) || line.includes(`ref=${refId}`)));
+        if (changedLines.length > 0)
+            lines.push("", ...changedLines);
+    }
+    if (removedRefIds.length > 0)
+        lines.push("", `Removed refs: ${removedRefIds.join(", ")}`);
+    return { changedRefs, header: lines[0], removedRefIds, text: lines.join("\n"), totalRefs };
+}
 function filterSnapshotData(data, request) {
     if (!isRecord(data))
         return undefined;
@@ -216,9 +278,41 @@ function filterSnapshotData(data, request) {
         visibleLines: visibleLines.length,
     };
 }
+function buildSnapshotDeltaEarlyResult({ deltaPolicy, filtered, fullSnapshot, options, snapshotData }) {
+    const delta = buildSnapshotDeltaText({ fullSnapshot, previousRefSnapshot: options.previousRefSnapshot, snapshotData });
+    return {
+        artifactManifest: options.artifactManifest,
+        result: {
+            content: [{ type: "text", text: delta.text }],
+            details: {
+                args: options.redactedArgs,
+                artifactManifest: options.artifactManifest,
+                command: "snapshot",
+                compatibilityWorkaround: options.compatibilityWorkaround,
+                data: { changedRefs: delta.changedRefs, mode: deltaPolicy.mode, removedRefs: delta.removedRefIds, thresholdLines: deltaPolicy.minLines, totalLines: filtered.totalLines, totalRefs: delta.totalRefs },
+                effectiveArgs: options.effectiveArgs,
+                fullOutputPath: undefined,
+                fullOutputPaths: undefined,
+                refSnapshot: fullSnapshot,
+                sessionTabTarget: fullSnapshot?.target,
+                sessionMode: options.sessionMode,
+                snapshotDelta: { changedRefs: delta.changedRefs, mode: deltaPolicy.mode, thresholdLines: deltaPolicy.minLines, totalRefs: delta.totalRefs },
+                ...buildAgentBrowserResultCategoryDetails({ args: options.effectiveArgs, command: "snapshot", succeeded: true }),
+                ...buildSessionDetailFields(options.sessionName, options.usedImplicitSession, options.namespace, options.managedSessionRestoreDisabled()),
+                summary: delta.header,
+            },
+            isError: false,
+        },
+    };
+}
 export async function trySnapshotFilter(options) {
     const request = parseSnapshotFilterRequest(options.commandTokens);
     if (!request || !options.sessionName)
+        return undefined;
+    // Delta gate (plain top-level `snapshot -i` only; explicit filters never compose with delta).
+    const deltaPolicy = request.explicitFilter ? undefined : resolveSnapshotDeltaPolicy();
+    const deltaHasPrior = request.explicitFilter ? false : hasTrackedRefSnapshot(options.previousRefSnapshot);
+    if (!request.explicitFilter && (!request.hasInteractive || !deltaPolicy || !deltaHasPrior))
         return undefined;
     const snapshotData = await runSessionCommandData({ args: request.cleanArgs, cwd: options.cwd, namespace: options.namespace, sessionName: options.sessionName, signal: options.signal });
     const filtered = request.role || request.search ? filterSnapshotData(snapshotData, request) : isRecord(snapshotData) ? { data: snapshotData, matchedRefs: isRecord(snapshotData.refs) ? Object.keys(snapshotData.refs).length : 0, totalLines: typeof snapshotData.snapshot === "string" ? snapshotData.snapshot.split(/\r?\n/).filter((line) => line.length > 0).length : 0, totalRefs: isRecord(snapshotData.refs) ? Object.keys(snapshotData.refs).length : 0, visibleLines: typeof snapshotData.snapshot === "string" ? snapshotData.snapshot.split(/\r?\n/).filter((line) => line.length > 0).length : 0 } : undefined;
@@ -234,12 +328,27 @@ export async function trySnapshotFilter(options) {
     const diff = request.diff ? buildSnapshotDiff(options.previousRefSnapshot, fullSnapshot) : undefined;
     if (fullSnapshot)
         options.sessionPageState.applyRefSnapshot({ sessionName: options.sessionStateKey ?? options.sessionName, snapshot: fullSnapshot, update: options.sessionPageStateUpdate });
+    const deltaAction = !request.explicitFilter && fullSnapshot
+        ? decideSnapshotDeltaPresentation({
+            deltaFull: request.deltaFull,
+            hasPrior: deltaHasPrior,
+            policy: deltaPolicy,
+            renderedLines: countRenderedSnapshotLines(snapshotData.snapshot),
+            sameUrl: refSnapshotTargetUrlsMatch(options.previousRefSnapshot?.target, fullSnapshot.target),
+        })
+        : undefined;
+    if (!request.explicitFilter && fullSnapshot?.target && options.sessionStateKey)
+        options.sessionPageState.applyTabTarget({ sessionName: options.sessionStateKey ?? options.sessionName, target: fullSnapshot.target, update: options.sessionPageStateUpdate });
+    if (deltaAction === "delta")
+        return buildSnapshotDeltaEarlyResult({ deltaPolicy, filtered, fullSnapshot, options, snapshotData });
     const presentation = await buildSnapshotPresentation(filtered.data, options.persistentArtifactStore, options.artifactManifest);
     const summary = request.role || request.search
         ? `Snapshot filter: ${filtered.matchedRefs}/${filtered.totalRefs} direct refs matched${request.role ? ` role=${request.role}` : ""}${request.search ? ` search ${JSON.stringify(request.search)}` : ""}; ${filtered.visibleLines} surrounding snapshot line${filtered.visibleLines === 1 ? "" : "s"} shown.`
         : request.diff
             ? diff?.summary ?? "Snapshot diff unavailable."
-            : "Snapshot viewport metadata collected.";
+            : !request.explicitFilter
+                ? formatSnapshotSummary(filtered.data)
+                : "Snapshot viewport metadata collected.";
     const viewportText = viewport ? `Viewport: ${viewport.innerWidth}×${viewport.innerHeight}, scroll ${viewport.scrollX},${viewport.scrollY}, document ${viewport.scrollWidth}×${viewport.scrollHeight}, sampled scroll containers ${viewport.containers.length}/${viewport.containerCount}.` : undefined;
     const diffText = diff && (request.role || request.search) ? diff.summary : undefined;
     const renderedTextSearchText = formatRenderedTextSearchMatches(renderedTextSearch);

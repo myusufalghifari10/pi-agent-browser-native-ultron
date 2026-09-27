@@ -163,6 +163,41 @@ function compilePathArtifactJobStep(step, action) {
         return { error: result.error };
     return { args: action === "waitForDownload" ? ["wait", "--download", result.value] : ["screenshot", result.value] };
 }
+// FINAL-DESIGN.md pillar A reshape item 2 (§5 step 4): job++ verification receipts. An optional
+// per-step `probe` compiles to one extra upstream verification row appended right after the
+// step's own rows. Probe rows are wrapper-generated evidence — additive receipts, never a
+// license for blind execution (the settle-retry ladder stays the recovery path).
+const JOB_STEP_PROBE_TYPES = ["url", "text", "visible", "value"];
+const JOB_PROBE_ALLOWED_FIELDS = new Set(["type", "value"]);
+const JOB_STEP_PROBE_ROWS = {
+    url: (value) => ({ action: "wait", args: ["wait", "--url", value, "--timeout", "5000"] }),
+    text: (value) => ({ action: "wait", args: ["wait", "--text", value, "--timeout", "5000"] }),
+    visible: (value) => ({ action: "is", args: ["is", "visible", value] }),
+    value: (value) => ({ action: "get", args: ["get", "value", value] }),
+};
+function compileJobStepProbeRows(step, jobAction, index) {
+    if (step.probe === undefined)
+        return { rows: [] };
+    if (!isRecord(step.probe))
+        return { error: "probe must be an object." };
+    const unsupportedField = Object.keys(step.probe).find((field) => !JOB_PROBE_ALLOWED_FIELDS.has(field));
+    if (unsupportedField)
+        return { error: `probe does not support ${unsupportedField}; supported fields are type, value.` };
+    if (typeof step.probe.type !== "string" || !JOB_STEP_PROBE_TYPES.includes(step.probe.type))
+        return { error: `probe.type must be one of: ${JOB_STEP_PROBE_TYPES.join(", ")}.` };
+    if (typeof step.probe.value !== "string" || step.probe.value.trim().length === 0)
+        return { error: `probe.value is required for ${step.probe.type} probes and must be a non-empty string.` };
+    const row = JOB_STEP_PROBE_ROWS[step.probe.type](step.probe.value);
+    return {
+        rows: [{
+            action: row.action,
+            args: row.args,
+            generatedFrom: "job.probe",
+            // Wrapper-generated row marker + owner attribution (mirrors compiledQaPreset's generatedFrom).
+            probe: { stepAction: jobAction, stepIndex: index, type: step.probe.type, value: step.probe.value },
+        }],
+    };
+}
 // ponytail: allowedFields for each action live in JOB_STEP_ALLOWED_FIELDS (same key
 // alignment enforced by Record<AgentBrowserJobStepAction, …>), so the compiler map no
 // longer mirrors that set per entry; the call site looks it up by action.
@@ -203,15 +238,44 @@ export function compileAgentBrowserJob(input) {
         }
         const jobAction = action;
         const compile = JOB_STEP_COMPILERS[jobAction];
-        const unsupportedFieldError = getUnsupportedJobStepFieldError(rawStep, jobAction, JOB_STEP_ALLOWED_FIELDS[jobAction]);
+        // `probe` is valid on every step, so it joins the allowed fields at the check site.
+        const unsupportedFieldError = getUnsupportedJobStepFieldError(rawStep, jobAction, new Set([...JOB_STEP_ALLOWED_FIELDS[jobAction], "probe"]));
         if (unsupportedFieldError)
             return { error: `job.steps[${index}]: ${unsupportedFieldError}` };
+        const probeSteps = compileJobStepProbeRows(rawStep, jobAction, index);
+        if (probeSteps.error)
+            return { error: `job.steps[${index}]: ${probeSteps.error}` };
         const compiledStep = compile(rawStep, index);
         if (compiledStep.error)
             return { error: compiledStep.error.startsWith(`job.steps[${index}]`) ? compiledStep.error : `job.steps[${index}]: ${compiledStep.error}` };
-        steps.push({ action: jobAction, args: compiledStep.args, generatedFrom: compiledStep.generatedFrom }, ...(compiledStep.extraSteps ?? []));
+        steps.push({ action: jobAction, args: compiledStep.args, generatedFrom: compiledStep.generatedFrom }, ...(compiledStep.extraSteps ?? []), ...probeSteps.rows);
     }
     return { compiled: { args: failFast ? ["batch", "--bail"] : ["batch"], failFast, stdin: JSON.stringify(steps.map((step) => step.args)), steps } };
+}
+// FINAL-DESIGN.md pillar A reshape item 2 (§5 step 4): receipts for job-mode verification probes.
+// Probe rows sit in compiled.steps right after their owning step, so batch rows correlate by
+// position exactly like analyzeQaPresetResults; --bail truncates rows after the first failing
+// step, so a missing row means the probe never ran (earlier step failed or the run ended early).
+// Receipts are additive evidence, not a verdict: a failed probe fails the job only because the
+// probe row IS a failed batch row under the existing batch verdict path.
+export function analyzeJobReceipts(steps, batchSteps, presentation) {
+    if (!Array.isArray(steps))
+        return undefined;
+    // No presentation means the run never produced per-row evidence; every probe stays unverified.
+    const rows = presentation === undefined || !Array.isArray(batchSteps) ? [] : batchSteps;
+    const receipts = [];
+    for (const [rowIndex, step] of steps.entries()) {
+        if (!isRecord(step) || step.generatedFrom !== "job.probe" || !isRecord(step.probe))
+            continue;
+        const row = rows[rowIndex];
+        receipts.push({
+            action: typeof step.probe.stepAction === "string" ? step.probe.stepAction : undefined,
+            index: typeof step.probe.stepIndex === "number" ? step.probe.stepIndex : rowIndex,
+            probe: { type: step.probe.type, value: step.probe.value },
+            result: row === undefined ? "skipped" : row.success === false ? "fail" : "pass",
+        });
+    }
+    return receipts.length > 0 ? receipts : undefined;
 }
 function describeQaChecksRun(checks) {
     const parts = [`load:${checks.loadState}`];
