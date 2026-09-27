@@ -1354,7 +1354,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         type: "object",
         properties: Object.fromEntries([
             "script", "args", "semanticAction", "qa", "job", "electron", "debug", "settle", "networkBody",
-            "vault", "devServer", "login", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
+            "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
             "stdin", "outputPath", "timeoutMs", "sessionMode",
         ].map((k) => [k, {}])),
         additionalProperties: true,
@@ -1362,7 +1362,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
     const agentBrowserTool = {
         name: "agent_browser",
         label: "Agent Browser",
-        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
+        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, checkpoint (auth-snapshot save/restore/list), devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
         promptSnippet: "Browser automation: open/click/fill/scrape live pages; use for ALL browser work, guide in docs/COMMAND_REFERENCE.md.",
         promptGuidelines: toolPromptGuidelines,
         // local patch P28: some model providers/harnesses deliver array/object tool params as JSON strings
@@ -1381,7 +1381,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
                     } catch {}
                 }
             }
-            for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
+            for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
                 const value = out[key];
                 if (typeof value === "string") {
                     try {

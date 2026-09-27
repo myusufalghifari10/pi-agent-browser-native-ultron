@@ -114,6 +114,41 @@ function deriveKey({ mode, passphrase, salt }) {
     return undefined;
 }
 
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7) — the credential vault keeps its
+// historical 3-segment AAD byte-for-byte so existing vault.json files still decrypt; checkpoint
+// envelopes are domain-separated so a checkpoint ciphertext can never be read as a vault payload
+// (or vice versa) even though both use the same key.
+function buildVaultAad(kdfMode) {
+    return Buffer.from(`${VAULT_AAD_PREFIX}|${VAULT_VERSION}|${kdfMode}`);
+}
+
+function buildCheckpointAad(kdfMode) {
+    return Buffer.from(`${VAULT_AAD_PREFIX}|checkpoint|${VAULT_VERSION}|${kdfMode}`);
+}
+
+function buildAad(domain, kdfMode) {
+    return domain === "checkpoint" ? buildCheckpointAad(kdfMode) : buildVaultAad(kdfMode);
+}
+
+function encryptWithKey(key, plaintextBytes, aad) {
+    const iv = randomBytes(IV_BYTES);
+    const cipher = createCipheriv("aes-256-gcm", key, iv);
+    cipher.setAAD(aad);
+    // final() must run before getAuthTag() — evaluation order matters here.
+    const payload = Buffer.concat([cipher.update(plaintextBytes), cipher.final()]);
+    return {
+        cipher: { alg: "aes-256-gcm", iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex") },
+        payload,
+    };
+}
+
+function decryptWithKey(key, envelope, aad) {
+    const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.cipher.iv, "hex"));
+    decipher.setAAD(aad);
+    decipher.setAuthTag(Buffer.from(envelope.cipher.tag, "hex"));
+    return Buffer.concat([decipher.update(Buffer.from(envelope.payload, "base64")), decipher.final()]);
+}
+
 function ensureVaultDirectory(paths) {
     if (!existsSync(paths.directory)) {
         mkdirSync(paths.directory, { mode: 0o700, recursive: true });
@@ -173,10 +208,7 @@ export function readVaultEntries({ env = process.env, passphrase } = {}) {
         return { status: "locked", error: `The credential vault at ${paths.vaultFile} needs a passphrase. Set ${VAULT_PASSPHRASE_ENV} for this process and retry.`, path: paths.vaultFile };
     }
     try {
-        const decipher = createDecipheriv("aes-256-gcm", key, Buffer.from(envelope.cipher.iv, "hex"));
-        decipher.setAAD(Buffer.from(`${VAULT_AAD_PREFIX}|${VAULT_VERSION}|${kdfMode}`));
-        decipher.setAuthTag(Buffer.from(envelope.cipher.tag, "hex"));
-        const plaintext = Buffer.concat([decipher.update(Buffer.from(envelope.payload, "base64")), decipher.final()]).toString("utf8");
+        const plaintext = decryptWithKey(key, envelope, buildVaultAad(kdfMode)).toString("utf8");
         const parsed = JSON.parse(plaintext);
         const entries = Array.isArray(parsed?.entries) ? parsed.entries.filter(isVaultEntryShape) : [];
         return { status: "ok", entries, path: paths.vaultFile, keyMode: kdfMode, updatedAtMs: envelope.updatedAtMs };
@@ -212,15 +244,12 @@ export function writeVaultEntries(entries, { env = process.env, passphrase } = {
         key = created.key;
         kdf = { mode: "keyfile" };
     }
-    const iv = randomBytes(IV_BYTES);
-    const cipher = createCipheriv("aes-256-gcm", key, iv);
-    cipher.setAAD(Buffer.from(`${VAULT_AAD_PREFIX}|${VAULT_VERSION}|${kdf.mode}`));
-    const plaintext = JSON.stringify({ entries: entries.filter(isVaultEntryShape) });
-    const payload = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]);
+    const plaintext = Buffer.from(JSON.stringify({ entries: entries.filter(isVaultEntryShape) }), "utf8");
+    const encrypted = encryptWithKey(key, plaintext, buildVaultAad(kdf.mode));
     const envelope = {
-        cipher: { alg: "aes-256-gcm", iv: iv.toString("hex"), tag: cipher.getAuthTag().toString("hex") },
+        cipher: encrypted.cipher,
         kdf,
-        payload: payload.toString("base64"),
+        payload: encrypted.payload.toString("base64"),
         updatedAtMs: Date.now(),
         version: VAULT_VERSION,
     };
@@ -369,4 +398,70 @@ export function getVaultStatus({ env = process.env } = {}) {
         statusError: read.error,
         vaultFile: paths.vaultFile,
     };
+}
+
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7). Raw-byte encrypt/decrypt with the
+// SAME key material and envelope format as the credential vault, so consumers that store bytes other
+// than vault entries (the checkpoint store) reuse this module's crypto instead of re-implementing it.
+// `domain` selects the AAD: the default keeps the legacy credential binding; "checkpoint" is
+// domain-separated. Returns a discriminated result and never throws for expected failure modes.
+export function encryptVaultBytes(plaintextBytes, { env = process.env, passphrase, domain = "credential" } = {}) {
+    if (!Buffer.isBuffer(plaintextBytes)) {
+        return { status: "error", error: "encryptVaultBytes needs the plaintext as a Buffer." };
+    }
+    const paths = getVaultPaths(env);
+    ensureVaultDirectory(paths);
+    const keyMaterial = readKeyMaterial({ env, passphrase });
+    if (keyMaterial.mode === "passphrase" && !keyMaterial.passphrase) {
+        return { status: "locked", error: `Writing the vault needs a passphrase. Set ${VAULT_PASSPHRASE_ENV} for this process and retry.` };
+    }
+    let key;
+    let kdf;
+    if (keyMaterial.mode === "passphrase") {
+        const salt = randomBytes(16);
+        key = deriveKey({ mode: "passphrase", passphrase: keyMaterial.passphrase, salt });
+        kdf = { mode: "passphrase", salt: salt.toString("hex"), n: SCRYPT_N, r: SCRYPT_R, p: SCRYPT_P };
+    }
+    else if (keyMaterial.key) {
+        key = keyMaterial.key;
+        kdf = { mode: "keyfile" };
+    }
+    else {
+        const created = writeKeyFile(paths);
+        if (!created.key) {
+            return { status: "error", error: `Could not create the vault key file at ${paths.keyFile}.` };
+        }
+        key = created.key;
+        kdf = { mode: "keyfile" };
+    }
+    const encrypted = encryptWithKey(key, plaintextBytes, buildAad(domain, kdf.mode));
+    return { status: "ok", envelope: { cipher: encrypted.cipher, kdf, payload: encrypted.payload.toString("base64") }, kdfMode: kdf.mode };
+}
+
+export function decryptVaultBytes(envelope, { env = process.env, passphrase, domain = "credential" } = {}) {
+    if (!envelope || typeof envelope !== "object" || typeof envelope.payload !== "string" || typeof envelope.cipher?.iv !== "string" || typeof envelope.cipher?.tag !== "string") {
+        return { status: "invalid-envelope", error: "The encrypted payload has an unsupported or incomplete format." };
+    }
+    const paths = getVaultPaths(env);
+    const keyMaterial = readKeyMaterial({ env, passphrase });
+    if (keyMaterial.missing) {
+        return { status: "missing-key", error: `The vault key file ${paths.keyFile} is missing, so the encrypted payload cannot be decrypted.` };
+    }
+    if (keyMaterial.invalid) {
+        return { status: "missing-key", error: `The vault key file ${paths.keyFile} does not contain a 64-character hex key.` };
+    }
+    const kdfMode = envelope.kdf?.mode === "passphrase" ? "passphrase" : "keyfile";
+    const salt = typeof envelope.kdf?.salt === "string" ? Buffer.from(envelope.kdf.salt, "hex") : undefined;
+    const key = kdfMode === "passphrase"
+        ? deriveKey({ mode: "passphrase", passphrase: keyMaterial.passphrase, salt })
+        : keyMaterial.key;
+    if (!key) {
+        return { status: "locked", error: `The encrypted payload needs a passphrase. Set ${VAULT_PASSPHRASE_ENV} for this process and retry.` };
+    }
+    try {
+        return { status: "ok", bytes: decryptWithKey(key, envelope, buildAad(domain, kdfMode)) };
+    }
+    catch {
+        return { status: "locked", error: "The encrypted payload could not be decrypted: the key or passphrase does not match." };
+    }
 }

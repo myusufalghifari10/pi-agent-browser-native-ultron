@@ -17,6 +17,8 @@ import { compactLargePresentationOutput } from "../../results/presentation/large
 import { extractEnvelopeErrorText, getAgentBrowserErrorText, parseAgentBrowserEnvelope } from "../../results/envelope.js";
 import { detectConfirmationRequired } from "../../results/confirmation.js";
 import { analyzeDebugPresetResults } from "../../input-modes/debug.js";
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7).
+import { finalizeCheckpointRun } from "../../input-modes/checkpoint.js";
 import { collectRevealedHeaderLines } from "../../results/presentation/diagnostics.js";
 import { analyzeSettleResult } from "../../input-modes/settle.js";
 import { extractNetworkBodies } from "../../input-modes/network-body.js";
@@ -28,7 +30,7 @@ import { isRecord } from "../../parsing.js";
 import { buildReadConfirmationNextActions, nextReadConfirmation } from "../../read-confirmation.js";
 import { pruneOwnedManagedSessionRestoreSnapshots } from "../../managed-session-restore.js";
 import { isManagedSessionRestoreKey } from "../../managed-session-storage.js";
-import { createFreshSessionName, extractUpstreamCommandTokens, resolveManagedSessionState } from "../../runtime.js";
+import { createFreshSessionName, extractUpstreamCommandTokens, redactSensitiveText, resolveManagedSessionState } from "../../runtime.js";
 import { getUpstreamEffectiveBatchSteps } from "../batch-stdin.js";
 import { closeManagedSession, inspectManagedSessionDaemon } from "./managed-session-daemon-policy.js";
 import { applyOpenResultTabCorrection, buildAboutBlankRecoveryHint, buildAboutBlankWarning, buildElectronPostCommandHealthDiagnostic, buildElectronRefFreshnessDiagnostic, buildElectronSessionMismatch, buildManagedSessionOutcome, collectOpenResultTabCorrection, collectSessionTabSelection, commandChoosesSessionTabTarget, extractNavigationSummaryFromData, extractStringResultField, findElectronLaunchRecordForSession, formatElectronPostCommandHealthText, formatElectronSessionMismatchText, getSessionContextKey, getStaleRefArgs, mergeNavigationSummaryIntoData, shouldCaptureNavigationSummary, shouldCorrectSessionTabAfterCommand, shouldInspectElectronPostCommandHealth, updateTraceOwnerState, } from "./session-state.js";
@@ -64,7 +66,7 @@ function extractDiagnosticRows(command, data) {
         return data.entries;
     return undefined;
 }
-export function applyDiagnosticsBufferDedup({ command, data, result, sessionKey }) {
+export function applyDiagnosticsBufferDedup({ command, data, result, sessionKey, jsonLane = false }) {
     try {
         const stream = command === "console" ? "console" : command === "errors" ? "errors" : command === "network" ? "network" : undefined;
         if (!stream || !result || !isRecord(result.details)) {
@@ -100,6 +102,26 @@ export function applyDiagnosticsBufferDedup({ command, data, result, sessionKey 
                 ...describeDiagnosticsBuffer(partition.state),
             },
         };
+        // wave3 (JSON-lane parseability): when the caller requested --json and content[0].text parsed,
+        // compose the dedup note into the wave3-H envelope contract instead of appending prose —
+        // {"result": <payload>, "appended": [..., "<redacted note>"]} when an envelope already exists,
+        // or a fresh envelope over a plain parsed payload. An unparseable JSON-lane payload keeps the
+        // historical prose append (the pre-wave3 behavior). The note is wrapper-generated text
+        // (counts + stream name only) but passes redactSensitiveText for envelope consistency.
+        if (jsonLane && Array.isArray(result.content) && result.content[0]?.type === "text") {
+            try {
+                const parsed = JSON.parse(result.content[0].text);
+                const redactedNote = redactSensitiveText(note);
+                const envelope = isRecord(parsed) && Array.isArray(parsed.appended) && "result" in parsed
+                    ? { ...parsed, appended: [...parsed.appended, redactedNote] }
+                    : { result: parsed, appended: [redactedNote] };
+                const jsonContent = [{ ...result.content[0], text: JSON.stringify(envelope, null, 2) }, ...result.content.slice(1)];
+                return { ...result, content: jsonContent, details };
+            }
+            catch {
+                // fall through to the prose append below
+            }
+        }
         const content = Array.isArray(result.content) && result.content[0]?.type === "text"
             ? [{ ...result.content[0], text: `${result.content[0].text}\n\n${note}` }, ...result.content.slice(1)]
             : [{ type: "text", text: note }, ...(result.content ?? [])];
@@ -797,6 +819,25 @@ export async function processBrowserOutput(input) {
         if (electronHandoff?.error && electronHandoff.failureCategory)
             presentation.failureCategory = electronHandoff.failureCategory;
         networkRoutesBySession = applyBatchNetworkRouteState({ data: presentationEnvelope?.data, routesBySession: networkRoutesBySession, sessionName: sessionStateKey, succeeded });
+        // local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7) — finalize checkpoint runs.
+        // Additive only: this block executes exclusively for kind === "checkpoint"; the settle-retry
+        // ladder and the P24 diagnostics buffer below are untouched. The finalizer encrypts/stores the
+        // captured state (save), grades the post-restore health check (restore), deletes the decrypted
+        // temp file, and registers the ciphertext path so the P12 scrub covers any accidental echo.
+        let checkpointDetails;
+        if (prepared.kind === "checkpoint" && prepared.compiledCheckpoint) {
+            const finalizedCheckpoint = await finalizeCheckpointRun({
+                compiledCheckpoint: prepared.compiledCheckpoint,
+                presentation,
+                presentationEnvelope,
+                processSucceeded,
+                succeeded,
+            });
+            succeeded = finalizedCheckpoint.succeeded;
+            presentation = finalizedCheckpoint.presentation;
+            presentationEnvelope = finalizedCheckpoint.presentationEnvelope;
+            checkpointDetails = finalizedCheckpoint.checkpoint;
+        }
         if (presentation.resultCategory === "failure" && succeeded) {
             succeeded = false;
             presentationEnvelope = { ...(presentationEnvelope ?? {}), error: presentation.summary, success: false };
@@ -977,15 +1018,21 @@ export async function processBrowserOutput(input) {
             ? prepared.ownedManagedSessionContext?.headedManagedAutosaveInterval
             : undefined;
         const result = buildFinalAgentBrowserToolResult({ aboutBlankSessionMismatch, artifactCleanup, categoryDetails: finalRecoveryState.categoryDetails, clickDispatchDiagnostic, commandTokens: prepared.commandTokens, comboboxFocusDiagnostic, compiledDebug: prepared.compiledDebug, compiledLogin: prepared.compiledLogin, compiledNetworkBody: prepared.compiledNetworkBody, compiledNetworkSourceLookup: prepared.compiledNetworkSourceLookup, compiledScript: prepared.compiledScript, compiledSemanticAction: prepared.compiledSemanticAction, compiledSettle: prepared.compiledSettle, compiledVault: prepared.compiledVault, compatibilityWorkaround: prepared.compatibilityWorkaround, currentRefSnapshot, currentRefSnapshotInvalidation, currentSessionTabTarget, currentSessionTabTargetUnknown, debugReport, electronBroadGetTextScopeDiagnostics, electronFailedConnectCleanup, electronHandoff, electronLaunch: prepared.electronLaunch, electronLaunchRecord, electronLaunchRecords, electronPostCommandHealth, electronProfileIsolationDetails: input.electronProfileIsolationDetails, electronRefFreshnessDiagnostic, electronSessionMismatch, errorText, evalResultWarning, evalStdinHint, exactSensitiveValues: prepared.exactSensitiveValues, executionPlan: prepared.executionPlan, fillVerificationDiagnostic, geolocationStubNote, headedLaunch: prepared.headedLaunch, inspectionText, jobReceipts, preserveAttachedBrowserSession: input.preserveAttachedBrowserSession === true, providerLaunch: prepared.providerLaunch, managedSessionHeadedAutosaveDisabled: resultHeadedManagedAutosaveDisabled || undefined, managedSessionHeadedAutosaveInterval: resultHeadedManagedAutosaveInterval, managedSessionOutcome, managedSessionRestoreDisabled: state.managedSessionRestoreState.isDisabled(prepared.executionPlan.sessionName, prepared.executionPlan.namespace), navigationSummary, networkBody: networkBodyResult, networkSourceLookup, noActivePageSnapshotFailure: finalRecoveryState.noActivePageSnapshotFailure, openResultTabCorrection, overlayBlockerDiagnostic, parseError, parseFailureOutput, parseSucceeded, plainTextInspection, presentation, presentationEnvelope, priorSessionTabTarget: prepared.priorSessionTabTarget, processResult, qaAttachedTarget, qaPreset, recoveredBy: settleRetryOutcome?.recovered === true ? "settle-retry" : undefined, settleRetryOutcome: settleRetryOutcome === undefined ? undefined : settleRetryOutcome.recovered ? "recovered" : "attempted-failed", recordingDependencyWarning, redactedArgs: prepared.redactedArgs, redactedCompiledElectron: prepared.redactedCompiledElectron, redactedCompiledJob: prepared.redactedCompiledJob, redactedCompiledNetworkSourceLookup: prepared.redactedCompiledNetworkSourceLookup, redactedCompiledQaPreset: prepared.redactedCompiledQaPreset, redactedCompiledSemanticAction: prepared.redactedCompiledSemanticAction, redactedCompiledSourceLookup: prepared.redactedCompiledSourceLookup, redactedContent, redactedProcessArgs: prepared.redactedProcessArgs, redactedRecoveryHint: prepared.redactedRecoveryHint, resultArtifactManifest, revealSecrets: prepared.revealSecrets, revealSecretsMatchedRows, revealedHeaderLines, richInputRecoveryDiagnostic: finalRecoveryState.richInputRecoveryDiagnostic, scrollNoopDiagnostic, selectorTextVisibilityDiagnostics, sessionMode: prepared.sessionMode, sessionTabCorrection, settleReport, settleRetryNote: settleRetryOutcome === undefined ? undefined : settleRetryOutcome.recovered ? "Recovered by settle-retry (1 automatic retry after 300ms)" : "Settle-retry attempted and failed; the fresher retried failure is returned.", sourceLookup, succeeded, timeoutPartialProgress, unsettledWebMcpMutation, userRequestedJson: prepared.userRequestedJson, verbosity: prepared.verbosity, visibleRefFallbackDiagnostic: finalRecoveryState.visibleRefFallbackDiagnostic, visibleRefFallbackSessionName: finalRecoveryState.visibleRefFallbackSessionName });
-        const resultWithCloseAll = closeAllApplied
-            ? { ...result, details: { ...(isRecord(result.details) ? result.details : {}), closeAllApplied: true } }
+        // local patch: checkpoint details merge — additive, secret-free by construction (ids, byte
+        // counts, labels only; no paths, no decrypted content).
+        const resultWithCheckpoint = checkpointDetails
+            ? { ...result, details: { ...(isRecord(result.details) ? result.details : {}), checkpoint: checkpointDetails } }
             : result;
+        const resultWithCloseAll = closeAllApplied
+            ? { ...resultWithCheckpoint, details: { ...(isRecord(resultWithCheckpoint.details) ? resultWithCheckpoint.details : {}), closeAllApplied: true } }
+            : resultWithCheckpoint;
         // local patch: annotate console/errors/network reads with a reliable "since last read" window (P24).
         const bufferedResult = applyDiagnosticsBufferDedup({
             command: prepared.executionPlan.commandInfo.command,
             data: presentation?.data,
             result: resultWithCloseAll,
             sessionKey: sessionStateKey,
+            jsonLane: prepared.userRequestedJson === true && !plainTextInspection,
         });
         const statePatch = { artifactManifest, freshSessionOrdinal, managedSessionActive, managedSessionCompatibilityWorkaround, managedSessionHeadedAutosaveDisabled, managedSessionHeadedAutosaveInterval, managedSessionCwd, managedSessionName, managedSessionNamespace, networkRoutesBySession };
         return { result: bufferedResult ?? resultWithCloseAll, statePatch };

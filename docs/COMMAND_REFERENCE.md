@@ -947,6 +947,18 @@ Storage: `~/.pi/agent/pi-agent-browser-native/vault.json` plus `vault.key` (both
 directory with `PI_AGENT_BROWSER_VAULT_DIR`, or use a passphrase instead of the key file with
 `PI_AGENT_BROWSER_VAULT_PASSPHRASE`. A group/other-readable vault refuses to open instead of being repaired.
 
+### Checkpoint (auth-snapshots)
+
+`checkpoint` bootstraps future sessions from origin login state: an auth snapshot is the upstream
+storage-state (cookies incl. HttpOnly + per-origin localStorage) — not a byte-identical browser fork.
+
+- `save` encrypts the current session's storage-state with the vault key into a content-addressed `auth-snapshots/<id>.ckpt` file (mode 0600, dir 0700); optional `label`, `url` (normalized to origin), `session`.
+- `restore <id>` decrypts into the dedicated session `piab-ckpt-<id8>` and runs a post-restore `snapshot` health check. Success means the state loaded and a page renders — it does NOT prove the origin login is still valid; verify the origin before consequential work.
+- `list` prints metadata only (opaque 16-hex ids, labels, ages); decrypted content and file paths are never shown.
+- Snapshots expire after 30 days (`PI_AGENT_BROWSER_CHECKPOINT_TTL_DAYS` overrides); restoring an expired snapshot demands `force: true`.
+- Any inspection outcome that is not a clean "not running" (live, unknown, or missing binary) is treated as a live target session and demands `confirm: true`.
+- Secrets handling: results carry ids and byte counts only; payloads are AES-256-GCM encrypted at rest; snapshot and temp paths are registered for exact-value scrubbing, and repeat restores honestly report "(session profile reused)" when applicable.
+
 ### Batch, auth, confirmations, sessions, chat, dashboard, devices, and setup
 
 | Command | Purpose |

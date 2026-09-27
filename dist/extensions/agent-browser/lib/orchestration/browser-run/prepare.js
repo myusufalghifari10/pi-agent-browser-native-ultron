@@ -1,6 +1,6 @@
 import { copyFile, mkdir, rename, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
-import { extractExplicitSessionName, getBooleanFlagValue, isUpstreamEnvFlagEnabled, projectUpstreamGlobalFlags, resolveAgentBrowserNamespace } from "../../argv-grammar.js";
+import { extractExplicitSessionName, checkpointSessionNameForId, getBooleanFlagValue, isCheckpointSessionName, isUpstreamEnvFlagEnabled, projectUpstreamGlobalFlags, resolveAgentBrowserNamespace } from "../../argv-grammar.js";
 import { isCloseCommand } from "../../command-taxonomy.js";
 import { isBrowserIndependentRead, needsManagedSession } from "../../command-policy.js";
 import { parseArgvDescriptor } from "../../argv-descriptor.js";
@@ -9,6 +9,10 @@ import { cleanupElectronLaunchResources } from "../../electron/cleanup.js";
 import { launchElectronApp } from "../../electron/launch.js";
 import { pathExists } from "../../fs-utils.js";
 import { getCompiledSemanticActionSessionPrefix } from "../../input-modes/semantic-action.js";
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7).
+import { resolveCheckpointGateDecision } from "../../input-modes/checkpoint.js";
+import { decryptCheckpoint, describeCheckpointEnvelope, getCheckpointTtlDays, isCheckpointExpired, listCheckpoints, readCheckpoint, reapStaleCheckpointTempFiles, writeCheckpointTempFile } from "../../vault/checkpoint-store.js";
+import { registerVaultSecret } from "../../vault/secret-registry.js";
 import { tryDirectAnchorDownload } from "./prepare/direct-anchor-download.js";
 import { tryNetworkRequestsPageFilter } from "./prepare/network-page-filter.js";
 import { tryContainerScroll, tryPageScrollTo } from "./prepare/scroll-shims.js";
@@ -35,7 +39,7 @@ import { findRequestedArtifactCloseViolation } from "./prompt-guards.js";
 export function normalizeRunInput(input) {
     // local patch: carry the new transparent fields and input-mode echoes through the run plan
     // (PATCHES.md P13-P22) so presentation can report verbosity, reveal scope and the compiled plans.
-    const base = { compiledDebug: input.compiledDebug, compiledLogin: input.compiledLogin, compiledNetworkBody: input.compiledNetworkBody, compiledScript: input.compiledScript, compiledSettle: input.compiledSettle, compiledVault: input.compiledVault, kind: input.kind, redactedArgs: input.redactedArgs, revealSecrets: input.revealSecrets, toolArgs: input.toolArgs, toolStdin: input.toolStdin, verbosity: input.verbosity };
+    const base = { compiledCheckpoint: input.compiledCheckpoint, compiledDebug: input.compiledDebug, compiledLogin: input.compiledLogin, compiledNetworkBody: input.compiledNetworkBody, compiledScript: input.compiledScript, compiledSettle: input.compiledSettle, compiledVault: input.compiledVault, kind: input.kind, redactedArgs: input.redactedArgs, revealSecrets: input.revealSecrets, toolArgs: input.toolArgs, toolStdin: input.toolStdin, verbosity: input.verbosity };
     switch (input.kind) {
         case "electron":
             return { ...base, compiledElectron: input.compiledElectron, redactedCompiledElectron: input.redactedCompiledElectron };
@@ -404,12 +408,117 @@ async function tryLocalStateRename(options) {
         },
     };
 }
+
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7). Modeled on tryLocalStateRename:
+// host-side work ahead of the ordinary pipeline. `list` never spawns; `restore` is TTL/confirmation
+// gated and its storage-state written to the pre-named 0600 temp file only after the gate passes;
+// `save` needs no gate. Every failure is a discriminated early result with a category.
+function buildCheckpointGateFailure(redactedArgs, errorText, failureCategory) {
+    return {
+        content: [{ type: "text", text: errorText }],
+        details: {
+            args: redactedArgs,
+            ...buildAgentBrowserResultCategoryDetails({ args: redactedArgs, errorText, failureCategory, succeeded: false, validationError: errorText }),
+            validationError: errorText,
+        },
+        isError: true,
+    };
+}
+
+function formatCheckpointListText(checkpoints) {
+    if (checkpoints.length === 0) {
+        return "No auth-snapshots saved yet. Log in, then checkpoint save to capture the storage-state (cookies + origins) for bootstrapping later sessions.";
+    }
+    return [
+        `Saved auth-snapshots (${checkpoints.length}, metadata only — decrypted content is never shown):`,
+        ...checkpoints.map((row) => `${row.id}  ${row.label ?? row.origin ?? "(unlabeled)"}  created ${typeof row.createdAtMs === "number" ? new Date(row.createdAtMs).toISOString() : "unknown"}  age ${row.ageDays ?? "?"}d`),
+    ].join("\n");
+}
+
+async function tryCheckpointPreSpawnGate(options) {
+    const compiled = options.compiledCheckpoint;
+    if (!compiled) {
+        return undefined;
+    }
+    const { plan } = compiled;
+    const agentBrowserProcessEnv = getAgentBrowserProcessEnvironment();
+    if (plan.action === "list") {
+        const listed = listCheckpoints({ env: agentBrowserProcessEnv });
+        if (listed.status !== "ok") {
+            return buildCheckpointGateFailure(options.redactedArgs, `Could not list auth-snapshots: ${listed.error}`, "checkpoint-error");
+        }
+        const text = formatCheckpointListText(listed.checkpoints)
+            + (listed.unreadable > 0 ? `\n${listed.unreadable} unreadable snapshot file(s) were skipped (they are never decrypted).` : "");
+        return {
+            content: [{ type: "text", text }],
+            details: {
+                args: options.redactedArgs,
+                checkpoint: { action: "list", checkpoints: listed.checkpoints, count: listed.checkpoints.length },
+                ...buildAgentBrowserResultCategoryDetails({ args: options.redactedArgs, succeeded: true }),
+            },
+        };
+    }
+    // save + restore: the upstream result repeats the path it was handed, so register the temp state
+    // path with the secret registry (P12) before anything can echo it downstream.
+    registerVaultSecret(compiled.tempPath, { source: "checkpoint-temp" });
+    if (plan.action === "save") {
+        return undefined;
+    }
+    const sessionName = checkpointSessionNameForId(plan.id);
+    if (!isCheckpointSessionName(sessionName)) {
+        return buildCheckpointGateFailure(options.redactedArgs, `Refusing to restore: ${sessionName} is not a valid checkpoint session name.`, "validation-error");
+    }
+    const read = readCheckpoint(plan.id, { env: agentBrowserProcessEnv });
+    if (read.status !== "ok") {
+        return buildCheckpointGateFailure(options.redactedArgs, `Cannot restore checkpoint ${plan.id}: ${read.error}`, "validation-error");
+    }
+    const described = describeCheckpointEnvelope(read.envelope);
+    const expired = isCheckpointExpired(read.envelope, { env: agentBrowserProcessEnv });
+    let targetSessionAlive = false;
+    if (!expired || plan.force === true) {
+        const daemon = await inspectManagedSessionDaemon({
+            cwd: options.cwd,
+            namespace: resolveAgentBrowserNamespace(options.args ?? [], agentBrowserProcessEnv.AGENT_BROWSER_NAMESPACE),
+            sessionName,
+            signal: options.signal,
+        });
+        // Fail closed: only a clean "inactive" inspection proves there is no live browser to clobber.
+        // "active" is alive, and "unknown"/"missing-binary" are not evidence of a dead session, so
+        // they are treated as alive and the confirm:true gate is demanded rather than skipped.
+        targetSessionAlive = daemon.status !== "inactive";
+        // Honest-prose input for the finalizer: "inactive" means the upstream registry knows this
+        // session name but no live browser — a prior stopped profile exists and will be reused.
+        compiled.priorCheckpointSessionProfile = daemon.status === "inactive";
+    }
+    const gate = resolveCheckpointGateDecision({
+        ageDays: described.ageDays,
+        expired,
+        plan,
+        targetSessionAlive,
+        ttlDays: getCheckpointTtlDays(agentBrowserProcessEnv),
+    });
+    if (gate) {
+        return buildCheckpointGateFailure(options.redactedArgs, gate.errorText, gate.failureCategory);
+    }
+    const decrypted = decryptCheckpoint(plan.id, { env: agentBrowserProcessEnv });
+    if (decrypted.status !== "ok") {
+        return buildCheckpointGateFailure(options.redactedArgs, `Could not decrypt checkpoint ${plan.id}: ${decrypted.error} The restore is refused — no claim of a working session can be made from an unreadable snapshot.`, "validation-error");
+    }
+    // Best-effort hygiene before the snapshot directory is ensured again: reap tmp-*.state files
+    // older than one hour (crashed restores). The reaper never throws and only touches stale temps.
+    reapStaleCheckpointTempFiles({ env: agentBrowserProcessEnv });
+    const writeError = writeCheckpointTempFile(compiled.tempPath, decrypted.bytes);
+    if (writeError) {
+        return buildCheckpointGateFailure(options.redactedArgs, writeError, "validation-error");
+    }
+    return undefined;
+}
 export async function prepareBrowserRun(options) {
     const { cwd, onUpdate, params, signal, state } = options;
     const { sessionPageState, traceOwners, managedSessionBaseName, ephemeralSessionSeed } = state;
     const agentBrowserProcessEnv = getAgentBrowserProcessEnvironment();
     let freshSessionOrdinal = state.freshSessionOrdinal;
-    const { compiledDebug, compiledElectron, compiledJob, compiledLogin, compiledNetworkBody, compiledNetworkSourceLookup, compiledQaPreset, compiledScript, compiledSemanticAction, compiledSettle, compiledSourceLookup, compiledVault, kind: resolvedInputKind, redactedArgs, redactedCompiledElectron, redactedCompiledJob, redactedCompiledNetworkSourceLookup, redactedCompiledQaPreset, redactedCompiledSemanticAction, redactedCompiledSourceLookup, revealSecrets, toolArgs, toolStdin, verbosity, } = normalizeRunInput(options.input);
+    const { compiledCheckpoint, compiledDebug, compiledElectron, compiledJob, compiledLogin, compiledNetworkBody, compiledNetworkSourceLookup, compiledQaPreset, compiledScript, compiledSemanticAction, compiledSettle, compiledSourceLookup, compiledVault, kind: resolvedInputKind, redactedArgs, redactedCompiledElectron, redactedCompiledJob, redactedCompiledNetworkSourceLookup, redactedCompiledQaPreset, redactedCompiledSemanticAction, redactedCompiledSourceLookup, revealSecrets, toolArgs, toolStdin, verbosity, } = normalizeRunInput(options.input);
     let runtimeToolArgs = toolArgs;
     let runtimeToolStdin = toolStdin;
     let electronLaunch;
@@ -491,6 +600,14 @@ export async function prepareBrowserRun(options) {
         const localStateRenameResult = await tryLocalStateRename({ args: preparedArgs.args, cwd, redactedArgs });
         if (localStateRenameResult)
             return { kind: "early-result", result: localStateRenameResult };
+        // local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7). The gate runs before the
+        // ordinary pipeline: `list` is answered host-side without spawning, `restore` is TTL- and
+        // confirmation-gated and only decrypted into the pre-named 0600 temp file once it passes, and
+        // the save/restore temp path is registered for exact-value scrubbing (P12) before anything can
+        // echo it. Every guard above and below this block is untouched.
+        const checkpointGateResult = await tryCheckpointPreSpawnGate({ args: preparedArgs.args, compiledCheckpoint, cwd, redactedArgs, signal });
+        if (checkpointGateResult)
+            return { kind: "early-result", result: checkpointGateResult };
         const routedReadConfirmation = state.sessionPageState.findReadConfirmation(preparedArgs.args, resolveAgentBrowserNamespace(preparedArgs.args, agentBrowserProcessEnv.AGENT_BROWSER_NAMESPACE));
         const readConfirmation = routedReadConfirmation?.capabilities?.readRequiresConfirmation === true ? routedReadConfirmation : undefined;
         let executionPlan = buildExecutionPlan(preparedArgs.args, {
@@ -1127,6 +1244,7 @@ export async function prepareBrowserRun(options) {
                     providerLaunch,
                     managedSessionPolicyLock,
                     compiledDebug,
+                    compiledCheckpoint,
                     compiledElectron,
                     compiledJob,
                     compiledLogin,

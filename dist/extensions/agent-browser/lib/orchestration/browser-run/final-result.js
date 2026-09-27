@@ -101,6 +101,17 @@ export function redactParseableJsonText(text) {
         return text;
     }
 }
+// wave3-H: sentinel parse for the caller--json envelope lane — distinguishes "parsed" (including a
+// literal `null` payload) from "did not parse", so prose appends only compose into an envelope when
+// the invariant (content[0].text stays JSON.parse-able) actually applies.
+function tryParseJsonText(text) {
+    try {
+        return { parsed: JSON.parse(text) };
+    }
+    catch {
+        return undefined;
+    }
+}
 export function buildJsonVisibleContent(options) {
     const { error, presentation, succeeded, warnings } = options;
     const payload = redactSensitiveValue({ artifacts: presentation.artifacts, data: presentation.data, error, recordingRecovery: presentation.recordingRecovery, readConfirmation: presentation.readConfirmation, success: succeeded, warnings: warnings && warnings.length > 0 ? warnings : undefined });
@@ -659,8 +670,24 @@ export function buildFinalAgentBrowserToolResult(options) {
     // local patch: verbosity gates diagnostic prose only, never structure (PATCHES.md P14).
     const shouldAppendDiagnosticText = appendedDiagnosticText.length > 0 && shouldAppendDiagnosticBlocks(options.verbosity) && (!options.userRequestedJson || options.plainTextInspection);
     let content = shouldAppendDiagnosticText && options.redactedContent[0]?.type === "text" ? [{ ...options.redactedContent[0], text: `${options.redactedContent[0].text}\n\n${appendedDiagnosticText}` }, ...options.redactedContent.slice(1)] : options.redactedContent;
+    // wave3-H: caller-requested --json lane composition (closes the wave2-C follow-up gap). When the
+    // caller asked for --json and the payload parsed as JSON, prose that must surface (electron launch
+    // text, P13 reveal notice) is collected into `jsonLaneAppended` and composed below into one
+    // parseable envelope instead of being string-appended onto content[0].text. Every other lane
+    // keeps the exact prior behavior.
+    const jsonLane = options.userRequestedJson === true && !options.plainTextInspection;
+    const jsonLanePayload = jsonLane && content[0]?.type === "text" ? tryParseJsonText(content[0].text) : undefined;
+    const jsonLaneAppended = [];
     if (options.electronLaunchRecord && options.succeeded && content[0]?.type === "text") {
-        content = [{ ...content[0], text: redactSensitiveText(formatElectronLaunchText({ handoff: options.electronHandoff, record: options.electronLaunchRecord, targets: options.electronLaunch?.targets ?? [], upstreamText: content[0].text })) }, ...content.slice(1)];
+        const launchTextOptions = { handoff: options.electronHandoff, record: options.electronLaunchRecord, targets: options.electronLaunch?.targets ?? [], upstreamText: content[0].text };
+        if (jsonLane && jsonLanePayload !== undefined) {
+            // JSON lane: keep content[0].text parseable; the launch prose surfaces in envelope.appended.
+            // The upstream payload echo is omitted from the prose — the payload itself is envelope.result.
+            jsonLaneAppended.push(redactSensitiveText(formatElectronLaunchText({ ...launchTextOptions, upstreamText: "" })));
+        }
+        else {
+            content = [{ ...content[0], text: redactSensitiveText(formatElectronLaunchText(launchTextOptions)) }, ...content.slice(1)];
+        }
     }
     let result = { content, details: redactToolDetails(details, options.exactSensitiveValues), isError: !options.succeeded };
     // local patch: explicit secret reveal (PATCHES.md P13). The warning is appended after the ordinary
@@ -669,12 +696,26 @@ export function buildFinalAgentBrowserToolResult(options) {
         const spillRemoved = suppressRevealedSpills(result.details);
         const warning = buildRevealSecretsWarning(options.revealSecrets, { matchedRows: options.revealSecretsMatchedRows ?? 0 });
         const revealedLines = Array.isArray(options.revealedHeaderLines) ? options.revealedHeaderLines : [];
-        const notice = [warning, spillRemoved ? "A spill file from this call was deleted before the result was returned." : undefined, revealedLines.length > 0 ? "Revealed value(s):" : undefined, ...revealedLines].filter((line) => line !== undefined).join("\n");
+        const spillNote = spillRemoved ? "A spill file from this call was deleted before the result was returned." : undefined;
+        const notice = [warning, spillNote, revealedLines.length > 0 ? "Revealed value(s):" : undefined, ...revealedLines].filter((line) => line !== undefined).join("\n");
+        // JSON lane: the envelope block passes redactSensitiveText, but P13's intentionally revealed
+        // header lines are layered on top of the redacted prose verbatim (reveal-after-redaction
+        // ordering — passing them through the heuristic pass would re-redact the deliberate reveal).
+        // Guarded by jsonLanePayload !== undefined like the electron branch above: with an unparseable
+        // payload no envelope is built, so the notice must fall back to the wave2 prose append instead
+        // of being silently dropped (wave3-H review round 1, minor 1).
+        const jsonNoticeBlock = jsonLane && jsonLanePayload !== undefined && result.content.length > 0 && result.content[0]?.type === "text"
+            ? [redactSensitiveText([warning, spillNote].filter((line) => line !== undefined).join("\n")), revealedLines.length > 0 ? ["Revealed value(s):", ...revealedLines].join("\n") : undefined].filter((part) => part !== undefined).join("\n")
+            : undefined;
+        if (jsonNoticeBlock !== undefined)
+            jsonLaneAppended.push(jsonNoticeBlock);
         result = {
             ...result,
-            content: result.content.length > 0 && result.content[0]?.type === "text"
-                ? [{ ...result.content[0], text: `${result.content[0].text}\n\n${notice}` }, ...result.content.slice(1)]
-                : [{ type: "text", text: notice }, ...result.content],
+            content: jsonNoticeBlock !== undefined
+                ? result.content
+                : result.content.length > 0 && result.content[0]?.type === "text"
+                    ? [{ ...result.content[0], text: `${result.content[0].text}\n\n${notice}` }, ...result.content.slice(1)]
+                    : [{ type: "text", text: notice }, ...result.content],
             details: {
                 ...result.details,
                 revealSecrets: describeRevealSecrets(options.revealSecrets, {
@@ -684,6 +725,15 @@ export function buildFinalAgentBrowserToolResult(options) {
                 }),
             },
         };
+    }
+    // wave3-H: caller--json envelope, built only when JSON-lane prose actually had to surface:
+    //   { "result": <the parsed payload object>, "appended": ["<redacted prose block>", ...] }
+    // `result` preserves the wave2-redacted payload object; each `appended` entry is one prose block
+    // (electron launch text, P13 reveal notice — in surfacing order) that passed redactSensitiveText,
+    // except P13's intentionally revealed header lines which are layered on top verbatim. Zero
+    // appends → this never runs and content stays byte-identical to the wave2 output.
+    if (jsonLanePayload !== undefined && jsonLaneAppended.length > 0 && result.content[0]?.type === "text") {
+        result = { ...result, content: [{ ...result.content[0], text: JSON.stringify({ result: jsonLanePayload.parsed, appended: jsonLaneAppended }, null, 2) }, ...result.content.slice(1)] };
     }
     // local patch: scrub every registered vault secret by exact value, last, so no path (content, details,
     // spill reference, batch echo) can echo a credential the wrapper itself typed into the page (PATCHES.md P12).

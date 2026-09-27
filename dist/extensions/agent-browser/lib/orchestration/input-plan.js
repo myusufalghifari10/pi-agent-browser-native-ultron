@@ -9,6 +9,8 @@ import { normalizeLoginFlowInput } from "../input-modes/login-flow.js";
 import { compileNetworkBodyRequest, normalizeNetworkBodyInput } from "../input-modes/network-body.js";
 import { compileAgentBrowserSettle } from "../input-modes/settle.js";
 import { normalizeVaultInput } from "../input-modes/vault-mode.js";
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7).
+import { compileCheckpointRun, normalizeCheckpointInput } from "../input-modes/checkpoint.js";
 import { getRevealSecretsScopeError, normalizeRevealSecrets } from "./browser-run/reveal-secrets.js";
 import { normalizeVerbosity } from "./browser-run/verbosity.js";
 import { compileAgentBrowserNetworkSourceLookup, compileAgentBrowserSourceLookup, redactNetworkSourceLookupArgs, redactNetworkSourceLookupUrl } from "../input-modes/lookups.js";
@@ -164,6 +166,10 @@ export function resolveAgentBrowserInput(options) {
     const networkBodyNormalized = params.networkBody === undefined ? {} : normalizeNetworkBodyInput(params.networkBody);
     const networkBodyResult = networkBodyNormalized.value ? compileNetworkBodyRequest(networkBodyNormalized.value) : {};
     const vaultInput = params.vault === undefined ? {} : normalizeVaultInput(params.vault);
+    // local patch: origin auth-snapshots — the `checkpoint` mode compiles to real upstream argv rows
+    // (`state save <temp>`, or a fail-fast restore batch) finalized by the output pipeline.
+    const checkpointInput = params.checkpoint === undefined ? {} : normalizeCheckpointInput(params.checkpoint);
+    const compiledCheckpoint = checkpointInput.value ? compileCheckpointRun(checkpointInput.value) : undefined;
     // local patch: devServer is host-only and needs `cwd` to resolve candidates, so input-plan passes the
     // raw object through and `lib/orchestration/dev-server-host/handler.js` validates it with cwd + registry.
     const devServerInput = params.devServer === undefined ? {} : { value: params.devServer };
@@ -188,10 +194,11 @@ export function resolveAgentBrowserInput(options) {
         ["settle", params.settle !== undefined],
         ["networkBody", params.networkBody !== undefined],
         ["vault", params.vault !== undefined],
+        ["checkpoint", params.checkpoint !== undefined],
         ["devServer", params.devServer !== undefined],
         ["login", params.login !== undefined],
     ].filter(([, supplied]) => supplied).map(([name]) => name);
-    const allModeNames = ["script", "args", "semanticAction", "job", "qa", "sourceLookup", "networkSourceLookup", "electron", "debug", "settle", "networkBody", "vault", "devServer", "login"];
+    const allModeNames = ["script", "args", "semanticAction", "job", "qa", "sourceLookup", "networkSourceLookup", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login"];
     const inputModeError = suppliedModeNames.length !== 1
         ? suppliedModeNames.length === 0
             ? `Provide exactly one input mode. Supported modes: ${allModeNames.join(", ")}.`
@@ -214,8 +221,8 @@ export function resolveAgentBrowserInput(options) {
     const compiledGeneratedBatch = compiledNetworkSourceLookup ?? compiledSourceLookup ?? compiledJob ?? compiledDebug;
     const normalizedExplicitArgs = normalizeExplicitEvalStdinArgs(params.args ?? [], params.stdin);
     const hostOnlyArgs = compiledVault ? ["--vault-host"] : compiledDevServer ? ["--devserver-host"] : compiledLogin ? ["--login-host"] : undefined;
-    const toolArgs = compiledElectron || compiledScript || hostOnlyKind ? (hostOnlyArgs ?? []) : compiledSemanticAction?.args ?? compiledSettle?.args ?? compiledNetworkBody?.args ?? compiledGeneratedBatch?.args ?? normalizedExplicitArgs.args;
-    const toolStdin = compiledSettle?.stdin ?? compiledGeneratedBatch?.stdin ?? normalizedExplicitArgs.stdin;
+    const toolArgs = compiledElectron || compiledScript || hostOnlyKind ? (hostOnlyArgs ?? []) : compiledSemanticAction?.args ?? compiledSettle?.args ?? compiledNetworkBody?.args ?? compiledGeneratedBatch?.args ?? compiledCheckpoint?.args ?? normalizedExplicitArgs.args;
+    const toolStdin = compiledSettle?.stdin ?? compiledGeneratedBatch?.stdin ?? compiledCheckpoint?.stdin ?? normalizedExplicitArgs.stdin;
     const redactedArgs = redactInvocationArgs(toolArgs);
     const generatedStdinError = params.stdin !== undefined
         ? compiledGeneratedBatch
@@ -257,6 +264,7 @@ export function resolveAgentBrowserInput(options) {
         ?? settleResult.error
         ?? networkBodyNormalized.error
         ?? vaultInput.error
+        ?? checkpointInput.error
         ?? devServerInput.error
         ?? loginFlowInput.error
         ?? verbosityResult.error
@@ -268,7 +276,10 @@ export function resolveAgentBrowserInput(options) {
         ?? scriptSessionModeError
         ?? attachedQaSessionError
         ?? (revealSecretsResult.value ? getRevealSecretsScopeError(parseArgvDescriptor(toolArgs).commandTokens, revealSecretsResult.value) : undefined)
-        ?? (compiledElectron || compiledScript || hostOnlyKind ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
+        // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
+        // validated by normalizeCheckpointInput above.
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }
@@ -279,8 +290,10 @@ export function resolveAgentBrowserInput(options) {
             ? "script"
             : compiledVault
                 ? "vault"
-                : compiledDevServer
-                    ? "devServer"
+                : compiledCheckpoint
+                    ? "checkpoint"
+                    : compiledDevServer
+                        ? "devServer"
                     : compiledLogin
                         ? "login"
                         : compiledNetworkSourceLookup
@@ -306,7 +319,7 @@ export function resolveAgentBrowserInput(options) {
     const redactedCompiledNetworkSourceLookup = redactCompiledNetworkSourceLookup(compiledNetworkSourceLookup);
     const redactedCompiledQaPreset = compiledQaPreset && redactedCompiledJob ? { ...redactedCompiledJob, checks: compiledQaPreset.checks } : undefined;
     const redactedCompiledSourceLookup = redactCompiledSourceLookup(compiledSourceLookup);
-    const normalized = validationError || isPlainTextInspectionArgs(toolArgs) || hostOnlyKind ? { args: toolArgs, stdin: toolStdin } : normalizeUrlLessOpen(toolArgs, toolStdin);
+    const normalized = validationError || isPlainTextInspectionArgs(toolArgs) || hostOnlyKind || compiledCheckpoint ? { args: toolArgs, stdin: toolStdin } : normalizeUrlLessOpen(toolArgs, toolStdin);
     const resolvedBase = { redactedArgs, revealSecrets: revealSecretsResult.value, toolArgs: normalized.args, toolStdin: normalized.stdin, verbosity: verbosityResult.value ?? "normal" };
     if (validationError) {
         return {
@@ -335,6 +348,10 @@ export function resolveAgentBrowserInput(options) {
     }
     if (compiledVault) {
         return { ...resolvedBase, compiledVault, kind: "vault", status: "valid" };
+    }
+    if (compiledCheckpoint) {
+        // The redacted echo is the plan itself: it never carries the temp state path or any state bytes.
+        return { ...resolvedBase, compiledCheckpoint, kind: "checkpoint", redactedCompiledCheckpoint: compiledCheckpoint.plan, status: "valid" };
     }
     if (compiledDevServer) {
         return { ...resolvedBase, compiledDevServer, kind: "devServer", status: "valid" };
@@ -408,6 +425,7 @@ export function buildValidationFailureResult(input) {
         details: {
             args: input.redactedArgs,
             compiledElectron: input.redactedCompiledElectron,
+            ...(input.redactedCompiledCheckpoint ? { checkpointPlan: input.redactedCompiledCheckpoint } : {}),
             compiledJob: input.redactedCompiledJob,
             compiledQaPreset: input.redactedCompiledQaPreset,
             compiledSourceLookup: input.redactedCompiledSourceLookup,

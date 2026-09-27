@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "3caa0f24859dc4397b1a45489ae4dfc449f6bb0888f5b93007a5178f9718f53d"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "f4cd2039545433fc57904dd9d712215ca4e60425a51eb0ac20f77877fe3023c8"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -40,7 +40,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "9bacc4f3ad499cc199ecba9b841ef9bec2846ff22807ca72c17ef75849b5efc4"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "e088ff1b1c87f07cf161a66c0bf27b7a2b81705384741c177c27698f7ca7be46"
       },
       "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding \u2192 Missing 'path' parameter; path-like operand \u2192 Invalid session name)."
     },
@@ -53,7 +53,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "eb1611c32b2aa7cf39ef23473ba673048d9c24e4f9026d41f46e7b248084c101"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "2a91b9e1bcadd3a63a796a34d2f995685f66726eaaee822b41a7e765e776ffe0"
       },
       "upstreamDefect": "set geo <lat> <lon> succeeded but never granted the geolocation permission, so pages always got User denied Geolocation (wrapper stub-install half)."
     },
@@ -66,7 +66,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js": "68bdd13e0304ca767ecb6b932ae4a624be86b6c39ea75c7ad13bd701efc61f4a"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/final-result.js": "96ea518b374c518f62ae0d0688df55a7b927db92b347fbe3b6b78d7d3b847ad1"
       },
       "upstreamDefect": "set geo emulation stayed invisible to the caller without a result note carrying the --init-script + sessionMode recipe (note half of P9)."
     },
@@ -147,7 +147,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "927443dce4a6cbd365a4ff143b6aa9f17c5be0ff3b2f29126860cfa986915884"
+        "dist/extensions/agent-browser/index.js": "c63766602d9e026a06cb3ba37c8f14c8246babe858032c8924027cf421068485"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage \u2014 current shape maintained in playbook.js, see PATCHES.md)."
     },

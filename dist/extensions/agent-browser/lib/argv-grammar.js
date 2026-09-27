@@ -328,3 +328,21 @@ export function stripSessionlessShapeGlobalFlags(commandTokens) {
     }
     return stripped;
 }
+
+// local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7). Restores always land in a dedicated
+// fresh session derived from the checkpoint id, so a restore can never silently reuse or overwrite
+// the caller's live browser session. The prefix lives here because this module owns session-name
+// grammar and identity (canonicalizeAgentBrowserNamespace, getAgentBrowserSessionIdentityKey).
+export const CHECKPOINT_SESSION_PREFIX = "piab-ckpt-";
+
+// Limitation: session names keep only the first 32 bits (8 hex) of the 64-bit id, so two distinct snapshots can collide on one session name.
+export function checkpointSessionNameForId(id) {
+    return `${CHECKPOINT_SESSION_PREFIX}${typeof id === "string" ? id.slice(0, 8) : ""}`;
+}
+
+export function isCheckpointSessionName(value) {
+    return typeof value === "string"
+        && value.length === CHECKPOINT_SESSION_PREFIX.length + 8
+        && value.startsWith(CHECKPOINT_SESSION_PREFIX)
+        && /^[0-9a-f]{8}$/.test(value.slice(CHECKPOINT_SESSION_PREFIX.length));
+}
