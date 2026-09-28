@@ -157,6 +157,32 @@ function getTabSelectGrammarError(commandTokens, stdin) {
     }
     return undefined;
 }
+// local patch (wave5 live-sweep W5-1): upstream `wait` has no --ms/--timeout flags — unknown flags
+// hang until the watchdog (25s+ of dead air in a Coursera batch, observed live twice) while the
+// positional duration form works fine (live-proven: ["wait","2000"] → "Fixed wait elapsed").
+// Reject the flag forms early with the real grammar instead of the opaque timeout.
+const WAIT_FLAG_GRAMMAR_MESSAGE = [
+    "agent-browser `wait` has no --ms/--timeout flags: unknown flags hang until the watchdog. Pass the duration positionally — {\"args\":[\"wait\",\"2000\"]}.",
+    "Condition forms that do work: {\"args\":[\"wait\",\"--text\",\"Login Page\"]}, {\"args\":[\"wait\",\"--url\",\"**/dashboard\"]}, {\"args\":[\"wait\",\"--load\"]}.",
+].join(" ");
+function isWaitFlagMisuseStep(step) {
+    return Array.isArray(step) && step[0] === "wait" && step.slice(1).some((token) => token === "--ms" || token === "--timeout");
+}
+function getWaitFlagGrammarError(commandTokens, stdin) {
+    if (!Array.isArray(commandTokens) || commandTokens.length === 0)
+        return undefined;
+    const descriptor = parseArgvDescriptor(commandTokens);
+    if (descriptor.commandInfo.command === "wait" && descriptor.commandTokens.slice(1).some((token) => token === "--ms" || token === "--timeout"))
+        return WAIT_FLAG_GRAMMAR_MESSAGE;
+    if (descriptor.commandInfo.command !== "batch")
+        return undefined;
+    const steps = getUpstreamEffectiveBatchSteps(descriptor.commandTokens, stdin);
+    for (let index = 0; index < steps.length; index += 1) {
+        if (isWaitFlagMisuseStep(steps[index]))
+            return `${WAIT_FLAG_GRAMMAR_MESSAGE} (Blocked batch step ${index + 1}.)`;
+    }
+    return undefined;
+}
 function getStateClearBlockError(commandTokens, stdin) {
     if (!Array.isArray(commandTokens) || commandTokens.length === 0)
         return undefined;
@@ -305,7 +331,7 @@ export function resolveAgentBrowserInput(options) {
         // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
         // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
         // validated by normalizeCheckpointInput above.
-        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }
