@@ -34,10 +34,11 @@ const PRIOR_TARGET = { title: "Test Page", url: "https://example.test/app" };
 
 // 1. Policy resolution: env contract.
 //
-// The 400 default is measured, not chosen — and measured on the RIGHT quantity: rendered lines of
-// an INTERACTIVE snapshot, because the delta gate requires `snapshot -i`. Live pages 2026-09-30:
-// tokopedia 251, github 426, wikipedia 1600. The old 2000 sat above all three, so the delta never
-// fired on any of them. Pinned to the measured number, so changing it is a conscious act.
+// The 400 default is measured and live-verified, on the RIGHT quantity: the delta gate requires
+// `snapshot -i`, and on that string one line is one ref, so this is really a ref-count threshold.
+// Live pages 2026-09-30: tokopedia 58 refs/58 lines, github 141/141 (stays full, correct),
+// wikipedia 547/547 (delta fires, 62,223 bytes -> 128). The old 2000 sat above all three, so the
+// delta had never fired on any real page. Pinned, so changing it is a conscious act.
 assert.deepEqual(resolveSnapshotDeltaPolicy({}), { minLines: 400, mode: "auto" }, "default is auto @400 lines");
 assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: " auto " }), { minLines: 400, mode: "auto" }, "auto is case/whitespace tolerant");
 assert.equal(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "never" }), undefined, "never disables the shim path entirely");
@@ -50,12 +51,14 @@ assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "
 // 1b. The measured threshold actually separates the pages it was measured on.
 {
     const policy = resolveSnapshotDeltaPolicy({});
-    // github measured 426 interactive lines: with 400 it deltas on re-snapshot, with the old 2000 it never did.
-    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 426, sameUrl: true }), "delta", "an ordinary large page (github, 426 interactive lines) must deltas, not re-render in full");
+    // wikipedia measured 547 interactive lines (one per ref): with 400 it deltas on re-snapshot.
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 547, sameUrl: true }), "delta", "a ref-heavy page (wikipedia, 547 interactive lines) must deltas, not re-render in full");
+    // github measured 141: below the threshold, so it must stay whole - both branches are proven.
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 141, sameUrl: true }), "full", "an ordinary page (github, 141 interactive lines) must stay full");
     // tokopedia measured 253: stays whole, because there is nothing to save.
     assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 120, sameUrl: true }), "full", "a small page (tokopedia, ~120 interactive lines) must stay whole");
     // A first snapshot has no prior, so delta could not help even on a huge page.
-    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: false, policy, renderedLines: 1600, sameUrl: true }), "passthrough", "no prior snapshot means no delta to compute");
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: false, policy, renderedLines: 547, sameUrl: true }), "passthrough", "no prior snapshot means no delta to compute");
 }
 
 // 2. Rendered line counting: cheap, non-empty lines only.

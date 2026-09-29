@@ -91,29 +91,37 @@ slimming patch already did its job. ~289 tokens for 17 modes is not a cost worth
 for. **One tool, many modes. Do not split it.** The premise that mode choice is a cold-start
 problem is false at this size.
 
-### 6.2 Delta-snapshot threshold — CLOSED, and the unit was wrong
+### 6.2 Delta-snapshot threshold — CLOSED, and the unit was wrong twice
 
 The open question said "node threshold, proposed >2k". The code said
-`DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 2000`. Same number, **different unit** — lines, not nodes.
-That coincidence is what let the designer and the implementer believe they were the same knob.
+`DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 2000` — rendered **lines**, not nodes. Same number,
+different unit; that coincidence is what made the question read as settled.
 
-Measured rendered snapshot lines (cdp + snapshot JSON):
+Reading the gate before tuning it (`trySnapshotFilter` early-returns unless
+`request.hasInteractive`) showed the delta path only ever runs for `snapshot -i`. A plain
+full `snapshot` never reaches it. And on the interactive snapshot string **one line is one
+ref**, so the threshold is really a ref-count threshold:
 
-| site | nodes | refs | lines | fires @2000? |
-|---|---|---|---|---|
-| tokopedia | 624 | 56 | 253 | no |
-| github | 1809 | 141 | 732 | no |
-| wikipedia | 4164 | 547 | 3238 | yes |
+| site | refs | interactive lines | branch @400 |
+|---|---|---|---|
+| tokopedia | 58 | 58 | full |
+| github | 141 | 141 | full |
+| wikipedia | 547 | 547 | **delta fires** |
 
-2000 only fired on the 4000+ node class, so an ordinary large page (github, ~24k chars,
-~6k tokens) re-rendered in full on every snapshot. **Lowered to 600** (commit 116d6c8).
-Safe because the delta is presentation-only — the tracked refSnapshot always stays the full new
-snapshot, so refs keep working and only the rendered text shrinks. The delta also only pays off
-on the second snapshot of a URL: on a first load every ref is "added", so the delta is the
-whole page anyway.
+**Live-verified both ways.** Wikipedia's second `snapshot -i` returned
+`Delta snapshot (vs previous): 0 refs changed (547 total)` — 62,223 bytes down to 128, a
+**486x** reduction. GitHub at 141 lines correctly stayed full.
 
-Caveat: three sites is a thin sample for a tuning constant. It is env-overridable
-(`PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES`) precisely because it is a guess with a floor.
+The old 2000 sat above every real page measured, so the delta **had never fired on any of
+them** — dead in practice, not merely mistuned. Now 400.
+
+Two tunings before this one were wrong, and both produced plausible-looking numbers:
+2000→600 used **full**-snapshot line counts (253 / 732 / 3238, a snapshot that never reaches
+the code), and 426/1600 came from counting every string inside the artifact JSON instead of
+its `snapshot` field. Only `countRenderedSnapshotLines(artifact.snapshot)` matches the gate.
+
+Caveat: three sites is a thin sample for a tuning constant, which is why
+`PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES` remains the override.
 
 ### 6.3 `act`-chain vs `job` coexistence — CLOSED, do not merge
 

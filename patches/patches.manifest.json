@@ -268,11 +268,11 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js": "96005870cd3ea1524de356d4140b11810766e99051a720432ed211eb58ab62dd"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js": "4469268ae11b056e99fdef8e32e6169699ad56bad1d00a7596d9baa2887e5113"
       },
       "upstreamDefect": "Not an upstream defect - a wrapper-local default that was never measured. DEFAULT_SNAPSHOT_DELTA_MIN_LINES was 2000, which only fires on the 4000+ node class, so an ordinary large page (github: 732 rendered lines, ~24k chars, ~6k tokens) re-rendered in full on every snapshot. Measured 2026-09-30 with the cdp escape hatch: tokopedia 253 lines, github 732, wikipedia 3238. Lowered to 600. The file was also previously un-ledgered, so drift in it was invisible to the integrity check.",
       "offlineTest": "tests-v2/wave2-f-snapshot-delta.mjs",
-      "verifiedLive": "LIVE-VERIFIED 2026-09-30: the first attempt (600, tuned on FULL-snapshot line counts) never fired - the delta gate requires snapshot -i. Retuned to 400 on measured INTERACTIVE counts (tokopedia 251, github 426, wikipedia 1600); the old 2000 sat above all three so the feature was dead."
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30. Both branches proven in a real browser: wikipedia 547 interactive lines > 400 -> \"Delta snapshot (vs previous): 0 refs changed (547 total)\", 62,223 bytes -> 128 (486x); github 141 lines < 400 -> correctly stays full. Key insight: on the interactive snapshot string one line is one ref, so this is a ref-count threshold. Two earlier tunings (600 on full-snapshot counts, 426/1600 on artifact-wide string counts) were both wrong; only countRenderedSnapshotLines(artifact.snapshot) matches the gate."
     }
   ]
 }

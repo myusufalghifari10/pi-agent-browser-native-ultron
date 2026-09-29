@@ -197,27 +197,30 @@ function buildSnapshotDiff(previous, current) {
 // The tracked refSnapshot always stays the FULL new snapshot; only the presented text shrinks.
 const SNAPSHOT_DELTA_MODE_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA";
 const SNAPSHOT_DELTA_MIN_LINES_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES";
-// Measured 2026-09-30 against real pages. The unit is RENDERED LINES OF AN INTERACTIVE SNAPSHOT
-// (`countRenderedSnapshotLines(snapshotData.snapshot)`), and the delta path only ever runs for
-// `snapshot -i` — a plain full `snapshot` never reaches this gate, so full-snapshot line counts
-// are the wrong number to tune against. Measured `snapshot -i` on live pages:
+// LIVE-VERIFIED 2026-09-30. Read the gate before tuning this: trySnapshotFilter early-returns
+// unless request.hasInteractive, so the delta path only ever runs for `snapshot -i` — a plain full
+// `snapshot` never reaches it. The compared quantity is
+// countRenderedSnapshotLines(snapshotData.snapshot), i.e. the INTERACTIVE snapshot string, and on
+// that string one line is one ref, so this threshold is really a threshold on REF COUNT:
 //
-//   tokopedia    58 refs     251 lines
-//   github      141 refs     426 lines  (~19k chars, ~5k tokens per re-snapshot)
-//   wikipedia   547 refs    1600 lines  (~62k chars, ~15k tokens)
+//   tokopedia    58 refs     58 lines
+//   github      141 refs    141 lines  (141 < 400 -> correctly stays full)
+//   wikipedia   547 refs    547 lines  (547 > 400 -> delta fires, live)
 //
-// The old 2000 sat ABOVE every one of those, so the delta never fired on any of them and the
-// feature was dead in practice. 400 covers the two pages where a re-snapshot genuinely costs
-// context and still leaves genuinely small pages whole.
+// The old 2000 sat above every real page measured, so the delta had never fired on any of them:
+// dead in practice, not merely mistuned. 400 covers ref-heavy pages (wikipedia's second
+// `snapshot -i` returned 128 bytes against 62,223 for the full one, a 486x reduction) and leaves
+// ordinary pages whole.
 //
-// First wave-20 attempt used full-snapshot counts (tokopedia 253, github 732, wikipedia 3238)
-// and picked 600. Those numbers are real but measure a snapshot that never reaches this code.
-// Corrected after the first live test failed to fire. Keep measuring the interactive snapshot.
+// Two earlier attempts at this number were wrong and both are worth remembering: tuning on FULL
+// snapshot line counts (tokopedia 253, github 732, wikipedia 3238 — a snapshot that never reaches
+// this code) gave 600, and counting every string inside the artifact JSON rather than the
+// `snapshot` field gave 426/1600. Measure with countRenderedSnapshotLines(artifact.snapshot).
 //
-// Safe to delta at all: the delta is presentation-only. The tracked refSnapshot always stays the
-// FULL new snapshot, so `click @e42` keeps working and only the rendered text shrinks. The delta
-// also only pays off on the SECOND snapshot of a URL — on a first load every ref is "added", so
-// the delta is the whole page anyway. The header names `--delta=full` as the way back.
+// Safe to delta at all: it is presentation-only. The tracked refSnapshot always stays the FULL new
+// snapshot, so `click @e42` keeps working and only the rendered text shrinks. It also only pays
+// off on the SECOND snapshot of a URL — on a first load every ref is "added", so the delta is the
+// whole page anyway. The header names `--delta=full` as the way back.
 //
 // Override with PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES.
 const DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 400;
