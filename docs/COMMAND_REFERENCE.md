@@ -988,6 +988,7 @@ These modes exist only in this local copy (`PATCHES.md` P11–P22). Each one is 
 | `vault` | `action` (`status`/`list`/`save`/`fill`/`totp`/`remove`/`unlock`) plus `handle`, `origin`, `type`, `username`, `label`, `secret`, `otpSeed`, `card`, `address`, `fields`, `visibleFields`, `submit`, `overwrite`, `promptIfMissing`, `minutes`, `session` (fill/totp only; local patch P27) | Local encrypted credential vault. `list` returns metadata only; `fill`/`totp` write into the page from a page script (never argv) after an exact-origin check; `save`/`unlock` use a masked prompt; card fills require an interactive confirmation. |
 | `devServer` | `action` (`detect`/`wait`/`start`/`stop`/`status`), `command`, `port`, `url`, `timeoutMs` | Local dev server lifecycle. The wrapper only ever owns processes it started itself; a port that is already answering is reported, never adopted or killed. |
 | `login` | `url`, `origin`, `handle`, `username`, `usernameSelector`, `passwordSelector`, `otpSelector`, `submitSelector`, `submit`, `waitForUrl`, `waitForText`, `loadStatePath`, `saveStatePath`, `timeoutMs`, `session` (local patch P27) | Login preset compiled into one fail-fast batch with the vault credential injected through the page script. |
+| `act` | `find` (`{ text?, role?, exact? }`), `action` (`click` \| `read`), `maxMatches` (1), `limit` (2000), `session` | Find an element and click or read it, in ONE call. Prefer this over writing a `querySelectorAll(...).find(...).click()` eval by hand. |
 | `cdp` | `session`, `commands` (each `{ method, params?, artifact? }`), `artifactPath`, `timeoutMs` (30000) | Raw Chrome DevTools Protocol escape hatch. Sends `commands` sequentially over one CDP connection to the target session's browser endpoint; use it for CDP domains the `agent-browser` command surface does not expose (Memory, extension control, PWA, audit). |
 
 New top-level fields that apply to any mode:
@@ -1015,6 +1016,35 @@ Credential-vault commands (host-side, no browser session needed except for fills
 **Storage:** `~/.pi/agent/pi-agent-browser-native/vault.json` plus `vault.key` (both mode 0600, directory 0700). Override the
 directory with `PI_AGENT_BROWSER_VAULT_DIR`, or use a passphrase instead of the key file with
 `PI_AGENT_BROWSER_VAULT_PASSPHRASE`. A group/other-readable vault refuses to open instead of being repaired.
+
+### `act` — one call instead of a hand-written candidate walk
+
+`{ "act": { "find": { "text": "Reply" }, "action": "click" } }`
+
+Measured reason it exists: 169 of 435 `eval --stdin` calls in the use-case sweep (39%) were
+the model writing the same candidate walk by hand, because upstream `find` takes the FIRST
+match with no visibility filter and has already landed on a hidden 0x0 duplicate once. Two
+properties are guaranteed, and both are the point:
+
+- **Hidden elements are filtered before matching.** A candidate must have a non-zero box
+  and a client rect, so a collapsed `0x0` duplicate cannot win.
+- **Ambiguity is refused, never guessed.** If more elements match than `maxMatches` (1 by
+  default), nothing is clicked and the result comes back `status: "ambiguous"` with each
+  candidate's label and rect. Narrow the query and try again. Do not raise `maxMatches` to
+  force a decision through.
+
+Matching rules: `text` is **exact** by default after whitespace normalisation, so `"Reply"`
+does not match `"Reply to all"` — pass `exact: false` for substring. `innerText` is
+consulted before `textContent` (it is what a human reads), with `aria-label` still winning as
+the accessible name. An explicit `role` attribute **replaces** the implicit one, so an
+`<a role="menuitem">` is a menu item and is not matched as a link; without an explicit role
+the tag default applies (`button`, `a` → link, `input` → checkbox/radio/textbox).
+
+`action: "read"` returns normalised `innerText` with `limit` applied, and reports
+`truncated` plus `totalChars` so a shortened read is never mistaken for a complete one.
+
+The result always carries `considered`, `visible`, `matched` and the candidates, so "not
+found" can be told apart from "found but ambiguous" without guessing.
 
 ### Raw CDP escape hatch (`cdp`)
 
