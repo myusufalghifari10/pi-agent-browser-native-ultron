@@ -31,6 +31,10 @@ import { appendScriptSessionLease, buildScriptBrowserEnvelope, buildScriptToolRe
 import { handleDevServerHostInput, stopAllDevServers } from "./lib/orchestration/dev-server-host/handler.js";
 import { handleLoginHostInput } from "./lib/orchestration/login-host/index.js";
 import { clearVaultUnlockSession, handleVaultHostInput } from "./lib/orchestration/vault-host/index.js";
+// local patch (wave14): the raw CDP escape hatch. It is host-only like vault/login/devServer, so it
+// runs inline in the tool executor and reuses hostDispatch for the one spawn it needs (`get cdp-url`),
+// which keeps session handling, redaction and the patch ledger on that path.
+import { handleCdpHostInput } from "./lib/orchestration/cdp-host/index.js";
 import { clearVaultSecrets } from "./lib/vault/secret-registry.js";
 import { formatSessionArtifactRetentionSummary, getSessionArtifactManifestEntryKey, isPendingRecordingCommand, isSessionArtifactManifest, mergeSessionArtifactManifest, retirePendingRecordingManifestEntries } from "./lib/results/artifact-manifest.js";
 import { appendUniqueAgentBrowserNextActions, applyNamespaceToNextActions, applySessionToNextActions, buildNextToolAction } from "./lib/results/next-actions.js";
@@ -1669,7 +1673,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
                 // going through the browser argv pipeline, and each browser call they need is dispatched back
                 // through this same tool executor so normal session handling, guards and redaction still apply
                 // (PATCHES.md P11, P20, P22).
-                if (resolvedInput.kind === "vault" || resolvedInput.kind === "devServer" || resolvedInput.kind === "login") {
+                if (resolvedInput.kind === "vault" || resolvedInput.kind === "devServer" || resolvedInput.kind === "login" || resolvedInput.kind === "cdp") {
                     let hostCallCount = 0;
                     const hostDispatch = async (params) => {
                         hostCallCount += 1;
@@ -1679,7 +1683,9 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
                         ? await handleVaultHostInput({ compiled: resolvedInput.compiledVault, ctx, dispatch: hostDispatch })
                         : resolvedInput.kind === "login"
                             ? await handleLoginHostInput({ compiled: resolvedInput.compiledLogin, dispatch: hostDispatch })
-                            : await handleDevServerHostInput({ cwd: ctx.cwd, input: resolvedInput.compiledDevServer });
+                            : resolvedInput.kind === "cdp"
+                                ? await handleCdpHostInput({ compiled: resolvedInput.compiledCdp, dispatch: hostDispatch, signal })
+                                : await handleDevServerHostInput({ cwd: ctx.cwd, input: resolvedInput.compiledDevServer });
                     return applyUnserializedOutputPath(hostResult);
                 }
                 const explicitSessionName = extractExplicitSessionName(toolArgs);

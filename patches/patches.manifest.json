@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "e0cc7ba458b8bac5eeecf593ef45711d5e84f35ce097cc3c1cbfc930256b8cf1"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "9b95c871bb04572356d17bf1e10ce9a1f567fab388a24b17b703f7f19d404ab5"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -147,7 +147,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "d014c0814bcef82bb885196b9a6f5a881864c45d53df619ebc9dfca15d23b9a1"
+        "dist/extensions/agent-browser/index.js": "de07a58f54a433307b0085f9ca5e9743b11ca22bdc88cae76dff0f40c6ab46d5"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md)."
     },
@@ -194,6 +194,38 @@
       "localFix": "The probe now separates press events (pointerdown/mousedown) from terminal ones (pointerup/mouseup/click) and only a terminal event clears a miss. Press-without-terminal is reported as the distinct status press-observed-click-missing and named as such in the summary, so the caller is told the element was re-rendered or moved instead of receiving the generic no-event wording. No synthetic click is ever dispatched.",
       "verifiedOffline": "tests-v2/wave12-press-vs-terminal-click.mjs",
       "verifiedLive": "pending — needs a full Pi restart (dist/ is loaded at startup)"
+    },
+    {
+      "id": "P-W14-cdp-mode",
+      "patches": [
+        "W14-cdp-input-mode"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "0400e4bf2a860241b1dc15d09c16ecb9128d35454f08c1a08d955c3df2732ded"
+      },
+      "upstreamDefect": "Nothing: this file is new and local. The upstream agent-browser CLI exposes no raw CDP surface, and its command list belongs to a third-party binary the wrapper cannot extend. Yusuf's requirement was an agent able to drive the browser freely, so the wrapper needed a channel past the CLI's command vocabulary.",
+      "localFix": "The cdp input mode: normalise + compile a { session?, commands[{method,params?,artifact?}], artifactPath?, timeoutMs } payload with 8 validation rules, no I/O. Wired as a host-only kind so the wrapper's argv guards are skipped, matching vault/login/devServer.",
+      "verifiedOffline": "tests-v2/wave14-cdp-input-mode.mjs (28 assertion groups)",
+      "verifiedLive": "pending — needs a full Pi restart"
+    },
+    {
+      "id": "P-W14-cdp-host",
+      "patches": [
+        "W14-cdp-host"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js": "f229d890a2329fa9ced442413bf640962d8c8ea8d84b85e66b4ddaf4b576fe8e"
+      },
+      "upstreamDefect": "Same gap as P-W14-cdp-mode, on the execution side: there was no way to speak CDP to the already-running browser. The CLI does expose `get cdp-url`, so the endpoint is reachable through the normal spawn pipeline, but nothing consumed it.",
+      "localFix": "Resolves the endpoint via the injected dispatch (get cdp-url, so redaction and the ledger still apply), opens one WebSocket from the Node 22 global, sends the commands sequentially on one connection, and returns per-command results in order. Heavy payloads go to artifactPath instead of inline. webSocketImpl is injectable so the offline test never opens a socket. No new dependency.",
+      "verifiedOffline": "tests-v2/wave14-cdp-host.mjs",
+      "verifiedLive": "pending — needs a full Pi restart"
     }
   ]
 }

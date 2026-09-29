@@ -11,6 +11,9 @@ import { compileAgentBrowserSettle } from "../input-modes/settle.js";
 import { normalizeVaultInput } from "../input-modes/vault-mode.js";
 // local patch: origin auth-snapshots (FINAL-DESIGN.md §5 step 7).
 import { compileCheckpointRun, normalizeCheckpointInput } from "../input-modes/checkpoint.js";
+// local patch (wave14): the raw CDP escape hatch. Imported here so the mode participates in the
+// one-mode-only contract like every other input mode.
+import { compileAgentBrowserCdp, normalizeCdpInput } from "../input-modes/cdp.js";
 import { getRevealSecretsScopeError, normalizeRevealSecrets } from "./browser-run/reveal-secrets.js";
 import { normalizeVerbosity } from "./browser-run/verbosity.js";
 import { compileAgentBrowserNetworkSourceLookup, compileAgentBrowserSourceLookup, redactNetworkSourceLookupArgs, redactNetworkSourceLookupUrl } from "../input-modes/lookups.js";
@@ -253,6 +256,12 @@ export function resolveAgentBrowserInput(options) {
     // local patch: devServer is host-only and needs `cwd` to resolve candidates, so input-plan passes the
     // raw object through and `lib/orchestration/dev-server-host/handler.js` validates it with cwd + registry.
     const devServerInput = params.devServer === undefined ? {} : { value: params.devServer };
+    // local patch (wave14): `sessionMode` is a TOP-LEVEL agent_browser field, not a member of the
+    // `cdp` object (normalizeCdpInput rejects it there with a message pointing at the top level).
+    // Rule 8 - reject session + sessionMode "fresh" - is therefore only observable when the caller
+    // passes the top-level value through, which is exactly why the second parameter exists.
+    const cdpInput = params.cdp === undefined ? {} : normalizeCdpInput(params.cdp, { sessionMode: params.sessionMode });
+    const compiledCdp = cdpInput.value ? compileAgentBrowserCdp(cdpInput.value) : undefined;
     const loginFlowInput = params.login === undefined ? {} : normalizeLoginFlowInput(params.login);
     const verbosityResult = normalizeVerbosity(params.verbosity);
     const revealSecretsResult = normalizeRevealSecrets(params.revealSecrets);
@@ -277,8 +286,9 @@ export function resolveAgentBrowserInput(options) {
         ["checkpoint", params.checkpoint !== undefined],
         ["devServer", params.devServer !== undefined],
         ["login", params.login !== undefined],
+        ["cdp", params.cdp !== undefined],
     ].filter(([, supplied]) => supplied).map(([name]) => name);
-    const allModeNames = ["script", "args", "semanticAction", "job", "qa", "sourceLookup", "networkSourceLookup", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login"];
+    const allModeNames = ["script", "args", "semanticAction", "job", "qa", "sourceLookup", "networkSourceLookup", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "cdp"];
     const inputModeError = suppliedModeNames.length !== 1
         ? suppliedModeNames.length === 0
             ? `Provide exactly one input mode. Supported modes: ${allModeNames.join(", ")}.`
@@ -296,11 +306,11 @@ export function resolveAgentBrowserInput(options) {
     const compiledVault = vaultInput.value;
     const compiledDevServer = devServerInput.value;
     const compiledLogin = loginFlowInput.value;
-    const hostOnlyKind = compiledVault ? "vault" : compiledDevServer ? "devServer" : compiledLogin ? "login" : undefined;
+    const hostOnlyKind = compiledVault ? "vault" : compiledDevServer ? "devServer" : compiledLogin ? "login" : compiledCdp ? "cdp" : undefined;
     const compiledJob = jobResult.compiled ?? compiledQaPreset;
     const compiledGeneratedBatch = compiledNetworkSourceLookup ?? compiledSourceLookup ?? compiledJob ?? compiledDebug;
     const normalizedExplicitArgs = normalizeExplicitEvalStdinArgs(params.args ?? [], params.stdin);
-    const hostOnlyArgs = compiledVault ? ["--vault-host"] : compiledDevServer ? ["--devserver-host"] : compiledLogin ? ["--login-host"] : undefined;
+    const hostOnlyArgs = compiledVault ? ["--vault-host"] : compiledDevServer ? ["--devserver-host"] : compiledLogin ? ["--login-host"] : compiledCdp ? ["--cdp-host"] : undefined;
     const toolArgs = compiledElectron || compiledScript || hostOnlyKind ? (hostOnlyArgs ?? []) : compiledSemanticAction?.args ?? compiledSettle?.args ?? compiledNetworkBody?.args ?? compiledGeneratedBatch?.args ?? compiledCheckpoint?.args ?? normalizedExplicitArgs.args;
     const toolStdin = compiledSettle?.stdin ?? compiledGeneratedBatch?.stdin ?? compiledCheckpoint?.stdin ?? normalizedExplicitArgs.stdin;
     const redactedArgs = redactInvocationArgs(toolArgs);
@@ -438,6 +448,9 @@ export function resolveAgentBrowserInput(options) {
     }
     if (compiledLogin) {
         return { ...resolvedBase, compiledLogin, kind: "login", status: "valid" };
+    }
+    if (compiledCdp) {
+        return { ...resolvedBase, compiledCdp, kind: "cdp", status: "valid" };
     }
     if (compiledDebug) {
         return { ...resolvedBase, compiledDebug, compiledGeneratedBatch: compiledDebug, kind: "debug", status: "valid" };
