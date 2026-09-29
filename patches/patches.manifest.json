@@ -152,6 +152,34 @@
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage \u2014 current shape maintained in playbook.js, see PATCHES.md)."
     },
     {
+      "id": "P-W11-batch",
+      "patches": [
+        "P-W11-batch"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "79bd79d938ae3c31bf2c93480dc2b3059fc1c6d603458825971d6fa6cf2bbeac"
+      },
+      "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type."
+    },
+    {
+      "id": "P-W10-scrim",
+      "patches": [
+        "P-W10-scrim"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/diagnostics.js",
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/diagnostics.js": "96c34ee478b562ee2bb89d9f0300b30c83efff17ae5b29a3708d8116e0abcff8",
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js": "aed21b2ca4574175e9aa3c1e26260f7b017b7d2ee3435256c2531cb31ad1964c"
+      },
+      "upstreamDefect": "The overlay-blocker diagnostic gated on a snapshot ref with role alertdialog/dialog, so a full-viewport scrim (position:fixed, no role, pointer-events:auto) was never detected and the agent blamed the wrong element. Adds an exported pure scrim predicate, an elementsFromPoint probe builder, and a scrim branch; diagnostic only, it never re-clicks."
+    },
+    {
       "id": "PL1",
       "patches": [
         "PL1"
