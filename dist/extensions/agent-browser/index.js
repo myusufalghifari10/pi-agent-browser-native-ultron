@@ -1357,7 +1357,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         type: "object",
         properties: Object.fromEntries([
             "script", "args", "semanticAction", "qa", "job", "electron", "debug", "settle", "networkBody",
-            "vault", "checkpoint", "devServer", "login", "cdp", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
+            "vault", "checkpoint", "devServer", "login", "cdp", "act", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
             "stdin", "outputPath", "timeoutMs", "sessionMode",
         ].map((k) => [k, {}])),
         additionalProperties: true,
@@ -1389,7 +1389,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         // a cdp object, the mode reads as "not supplied", and the call falls through to args-mode and
         // dies with "args must contain at least one command token" - an error that points nowhere near
         // the real cause. The schema property list above needs it for the same reason.
-        for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "cdp", "sourceLookup", "networkSourceLookup"]) {
+        for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "cdp", "act", "sourceLookup", "networkSourceLookup"]) {
             const value = out[key];
             if (typeof value === "string") {
                 try {

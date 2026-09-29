@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "3874a4e28503baff67892fdffeca113e2c3eceec240a40e1fd07053b195029a7"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "b2fd3ba1f2d912b6f33fb9c4d6e160b62bb17e77bda555f4d7cf1b3e2c50a608"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -147,7 +147,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "f55f9b83ac0d6ac89f1379e6acbb2a3309aaa29a07417480c8beb020c43b0123"
+        "dist/extensions/agent-browser/index.js": "feaf66a4a169d43f7a4b88650238af9bd27938636a27f377e341e14841e069a1"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md)."
     },
@@ -242,6 +242,21 @@
         "W15-unknown-flag-guard"
       ],
       "upstreamDefect": "agent-browser 0.37.0 ignores a flag it does not recognise instead of refusing it, so a mistyped flag produced no error at all: the spawn went out, nothing consumed the flag, and the call sat until the wrapper's 35s watchdog fired and reported 'timeout'. That is the worst possible answer twice over - it burns 35 seconds and it names the wrong cause, so a model repeats the same typo. The wrapper already carries the full upstream flag surface in this file, so the fix is a lookup rather than a new vocabulary."
+    },
+    {
+      "id": "P-W16-act-mode",
+      "patches": [
+        "W16-act-find-and-act"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/act.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/act.js": "027d2cebd13a9d56fbb2ac86d514f7b016bf539e28a787d607c9851f49e02678"
+      },
+      "upstreamDefect": "agent-browser's `find` takes the FIRST match and offers no visibility filter, so it lands on hidden 0x0 duplicates - `find text \"Run\"` once clicked a hidden duplicate instead of the real 71x32 button. Measured consequence: 169 of 435 eval --stdin calls in the 14 use-case sweep (39%) were the model re-deriving the same candidate walk in JavaScript by hand, precisely because `find` could not be trusted. The upstream CLI cannot be changed from here, but the wrapper can own the JavaScript, so `act` generates it once.",
+      "offlineTest": "tests-v2/wave16-act.mjs",
+      "verifiedLive": "pending - needs a full Pi restart"
     }
   ]
 }

@@ -29,8 +29,8 @@ const index = readFileSync(indexPath, "utf8");
 // --- 1. one-mode-only contract ---------------------------------------------
 assert.match(plan, /\["cdp", params\.cdp !== undefined\]/,
     "cdp must be counted in suppliedModeNames, or a cdp+args call would be accepted");
-assert.match(plan, /const allModeNames = \[[^\]]*"cdp"\]/,
-    "cdp must be listed in allModeNames so the error message names it and the count sees it");
+assert.match(plan, /const allModeNames = \[[^\]]*"cdp"/,
+    "cdp must be listed in allModeNames so the error message names it and the count sees it (later modes may follow it; the list grew again in wave16)");
 assert.match(plan, /import \{ compileAgentBrowserCdp, normalizeCdpInput \} from "\.\.\/input-modes\/cdp\.js"/,
     "the cdp compiler and normaliser must be imported from the frozen module path");
 
