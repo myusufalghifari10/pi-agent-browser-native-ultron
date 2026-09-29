@@ -41,7 +41,10 @@ group("frozen interface: constants have the exact contract values", () => {
     assert.equal(CDP_MAX_SESSION_CHARS, 64);
     assert.equal(CDP_MAX_TIMEOUT_MS, 120000);
     assert.equal(CDP_DEFAULT_TIMEOUT_MS, 30000);
-    assert.deepEqual([...CDP_ALLOWED_FIELDS].sort(), ["artifactPath", "commands", "session", "timeoutMs"]);
+    // targetId was added after the first live test: `get cdp-url` returns the browser endpoint and
+    // page-scoped CDP domains only exist on an attached target, so the caller needs a way to pick
+    // which tab when the browser has more than one page open.
+    assert.deepEqual([...CDP_ALLOWED_FIELDS].sort(), ["artifactPath", "commands", "session", "targetId", "timeoutMs"]);
     assert.deepEqual([...CDP_ALLOWED_COMMAND_FIELDS].sort(), ["artifact", "method", "params"]);
 });
 
@@ -237,6 +240,24 @@ group("artifact: a per-command artifact name is a single path segment; artifactP
 });
 
 // ---------------------------------------------------------------------------
+group("targetId (wave14b): optional, validated, and carried into the compiled payload", () => {
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }] }).error, undefined,
+        "targetId must stay optional: a single-window session needs no configuration");
+    const ok = normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "  ABC123  " });
+    assert.equal(ok.error, undefined, "a valid targetId must pass");
+    assert.equal(ok.value.targetId, "ABC123", "targetId must be trimmed like session is");
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "" }).error !== undefined, true, "an empty targetId is an error");
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: 123 }).error !== undefined, true, "a non-string targetId is an error");
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "A B" }).error !== undefined, true, "whitespace in targetId is an error");
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "x".repeat(129) }).error !== undefined, true, "an over-long targetId is an error");
+    // Shape-agnostic on purpose: a wrong id must come back as CDP's own "No target with given id"
+    // rather than a wrapper guess about the id format.
+    assert.equal(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "not-hex-at-all" }).error, undefined,
+        "targetId must not be format-validated, so a bad id surfaces from CDP itself");
+    assert.equal(compileAgentBrowserCdp(normalizeCdpInput({ commands: [{ method: "Runtime.evaluate" }], targetId: "TAB1" }).value).targetId, "TAB1",
+        "targetId must survive compilation");
+});
+
 group("compileAgentBrowserCdp returns exactly kind, commands, session?, artifactPath?, timeoutMs", () => {
     const minimal = compileAgentBrowserCdp(normalizeCdpInput(VALID_INPUT).value);
     assert.deepEqual(Object.keys(minimal).sort(), ["commands", "kind", "timeoutMs"]);

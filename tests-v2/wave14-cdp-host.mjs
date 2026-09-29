@@ -123,10 +123,96 @@ try {
     }
 
     // --- rules 2+3: one connection, sequential incremental ids, results in request order ---------
+    // --- wave14b: the attach handshake, and why it exists -----------------------------------------
+    // The first live run sent Runtime.evaluate straight down the browser-level socket and got
+    // -32601 "wasn't found": page-scoped domains live on a TARGET session, not the browser one.
+    // These assertions exist so that contract cannot silently regress to "attach later, if ever".
     {
         const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
         const { sockets, StubWebSocket } = makeSocketFactory({
-            replies: (message) => (message.id === 1 ? { id: 1, result: { targetInfos: [] } } : { id: message.id, result: { value: "Example Domain" } }),
+            replies: (message) => {
+                if (message.method === "Target.getTargets") {
+                    return { id: message.id, result: { targetInfos: [{ targetId: "TAB1", type: "page" }, { targetId: "WBG", type: "browser" }] } };
+                }
+                if (message.method === "Target.attachToTarget") {
+                    return { id: message.id, result: { sessionId: "PAGE-SESSION" } };
+                }
+                return { id: message.id, result: { value: "Example Domain" } };
+            },
+        });
+        const result = await handleCdpHostInput({
+            compiled: { commands: [{ method: "Runtime.evaluate", params: { expression: "document.title", returnByValue: true } }], session: "ultron1" },
+            dispatch,
+            webSocketImpl: StubWebSocket,
+        });
+        const sent = sockets[0].sent;
+        const attach = sent.find((m) => m.method === "Target.attachToTarget");
+        assert.ok(sent.find((m) => m.method === "Target.getTargets"), "a page target must be discovered before commands are routed");
+        assert.ok(attach, "the handler must attach to a target; page domains do not exist on the browser socket");
+        assert.equal(attach.params.targetId, "TAB1", "a page target must be chosen, never the browser target");
+        assert.equal(attach.params.flatten, true, "flat sessions are required so replies can be correlated by sessionId");
+        const evaluate = sent.find((m) => m.method === "Runtime.evaluate");
+        assert.equal(evaluate.sessionId, "PAGE-SESSION", "page-scoped commands must be routed through the attached session");
+        assert.equal(result.isError, false);
+        assert.equal(result.details.cdp.results[0].ok, true, "Runtime.evaluate must succeed once attached");
+    }
+
+    // --- wave14b: a browser-scoped method falls back instead of failing ---------------------------
+    // Target.*/Browser.* do not exist on a page session, so the caller must not have to know that.
+    {
+        const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
+        const { sockets, StubWebSocket } = makeSocketFactory({
+            replies: (message) => {
+                if (message.method === "Target.getTargets") {
+                    return { id: message.id, result: { targetInfos: [{ targetId: "TAB1", type: "page" }] } };
+                }
+                if (message.method === "Target.attachToTarget") {
+                    return { id: message.id, result: { sessionId: "PAGE-SESSION" } };
+                }
+                if (message.sessionId === "PAGE-SESSION") {
+                    return { error: { code: -32601, message: "'Browser.getVersion' wasn't found" }, id: message.id };
+                }
+                return { id: message.id, result: { product: "Chrome/146" } };
+            },
+        });
+        const result = await handleCdpHostInput({
+            compiled: { commands: [{ method: "Browser.getVersion" }], session: "ultron1" },
+            dispatch,
+            webSocketImpl: StubWebSocket,
+        });
+        const attempts = sockets[0].sent.filter((m) => m.method === "Browser.getVersion");
+        assert.equal(attempts.length, 2, "a -32601 on the page session must be retried once on the browser session");
+        assert.equal(attempts[0].sessionId, "PAGE-SESSION");
+        assert.equal(attempts[1].sessionId, undefined, "the retry must go to the browser session, un-attached");
+        assert.equal(result.details.cdp.results[0].ok, true, "the fallback must be reported as a success, not a failure");
+    }
+
+    // --- an explicit targetId skips discovery ----------------------------------------------------
+    {
+        const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
+        const { sockets, StubWebSocket } = makeSocketFactory({
+            replies: (message) => (message.method === "Target.attachToTarget"
+                ? { id: message.id, result: { sessionId: "CHOSEN" } }
+                : { id: message.id, result: { value: 1 } }),
+        });
+        await handleCdpHostInput({
+            compiled: { commands: [{ method: "Runtime.evaluate", params: { expression: "1" } }], session: "ultron1", targetId: "CHOSEN-TAB" },
+            dispatch,
+            webSocketImpl: StubWebSocket,
+        });
+        assert.equal(sockets[0].sent.filter((m) => m.method === "Target.getTargets").length, 0, "an explicit targetId must skip discovery");
+        assert.equal(sockets[0].sent[0].params.targetId, "CHOSEN-TAB", "the caller's target must be the one attached");
+    }
+
+    {
+        const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
+        const { sockets, StubWebSocket } = makeSocketFactory({
+            replies: (message) => {
+                if (message.method === "Target.getTargets") {
+                    return { id: message.id, result: { targetInfos: [] } };
+                }
+                return { id: message.id, result: { value: "Example Domain" } };
+            },
         });
         const result = await handleCdpHostInput({
             compiled: {
@@ -141,9 +227,16 @@ try {
         });
         assert.equal(sockets.length, 1, "one cdp call means exactly one socket");
         assert.equal(sockets[0].url, CDP_URL);
-        assert.deepEqual(sockets[0].sent.map((message) => message.id), [1, 2], "ids must be incremental");
-        assert.deepEqual(sockets[0].sent.map((message) => message.method), ["Target.getTargets", "Runtime.evaluate"], "commands must be sent in order");
-        assert.deepEqual(sockets[0].sent[0].params, {}, "params must be forwarded");
+        // The first frame on the wire is the handler's own discovery probe; the caller's commands
+        // follow in order. Filtering by method name would be ambiguous here, because the caller's
+        // first command is also Target.getTargets.
+        const sentAll = sockets[0].sent;
+        assert.equal(sentAll[0].method, "Target.getTargets", "the handler probes for a target before anything else");
+        assert.equal(sentAll[0].sessionId, undefined, "the discovery probe runs on the browser session");
+        const callerCommands = sentAll.slice(1);
+        assert.deepEqual(callerCommands.map((message) => message.id), [2, 3], "ids must stay incremental across the handshake");
+        assert.deepEqual(callerCommands.map((message) => message.method), ["Target.getTargets", "Runtime.evaluate"], "commands must be sent in order");
+        assert.deepEqual(callerCommands[0].params, {}, "params must be forwarded");
         assert.equal(result.isError, false);
         assert.equal(result.resultCategory, "success");
         assert.equal(result.failureCategory, undefined, "a clean run carries no failureCategory");
@@ -162,9 +255,17 @@ try {
     {
         const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
         const { sockets, StubWebSocket } = makeSocketFactory({
-            replies: (message) => (message.id === 1
-                ? { id: 1, result: { value: "kept" } }
-                : { error: { code: -32601, message: "'Nope.notAMethod' wasn't found" }, id: 2 }),
+            // Keyed on method, not id: the handler's discovery probe occupies id 1, so an
+            // id-keyed stub silently starts answering the wrong frames after the handshake landed.
+            replies: (message) => {
+                if (message.method === "Target.getTargets") {
+                    return { id: message.id, result: { targetInfos: [] } };
+                }
+                if (message.method === "Runtime.evaluate") {
+                    return { id: message.id, result: { value: "kept" } };
+                }
+                return { error: { code: -32601, message: "'Nope.notAMethod' wasn't found" }, id: message.id };
+            },
         });
         const result = await handleCdpHostInput({
             compiled: { commands: [{ method: "Runtime.evaluate", params: { expression: "1" } }, { method: "Nope.notAMethod" }], session: "ultron1" },
@@ -185,8 +286,18 @@ try {
     // --- rule 4: timeout closes the socket, reports "timeout", and does not hang ----------------
     {
         const { dispatch } = dispatchReturning({ cdpUrl: CDP_URL });
+        let calls = 0;
         const { sockets, StubWebSocket } = makeSocketFactory({
-            replies: (message) => (message.id === 1 ? { id: 1, result: { value: "first" } } : undefined),
+            // Answer the first Runtime.evaluate and let the second hang. Counting is deliberate: the
+            // handler's discovery probe occupies id 1, so an id-keyed reply would satisfy the probe
+            // and leave the first real command unanswered, turning this into a different test.
+            replies: (message) => {
+                if (message.method !== "Runtime.evaluate") {
+                    return { id: message.id, result: { targetInfos: [] } };
+                }
+                calls += 1;
+                return calls === 1 ? { id: message.id, result: { value: "first" } } : undefined;
+            },
         });
         const result = await handleCdpHostInput({
             compiled: { commands: [{ method: "Runtime.evaluate" }, { method: "Runtime.evaluate", params: { expression: "while(1){}" } }], session: "ultron1", timeoutMs: 60 },

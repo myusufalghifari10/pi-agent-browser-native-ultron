@@ -204,7 +204,7 @@
         "dist/extensions/agent-browser/lib/input-modes/cdp.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "0400e4bf2a860241b1dc15d09c16ecb9128d35454f08c1a08d955c3df2732ded"
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "f42a082cc82280d1d1c256c1f07cf18a6b25cc929626164204f9a44527001659"
       },
       "upstreamDefect": "Nothing: this file is new and local. The upstream agent-browser CLI exposes no raw CDP surface, and its command list belongs to a third-party binary the wrapper cannot extend. Yusuf's requirement was an agent able to drive the browser freely, so the wrapper needed a channel past the CLI's command vocabulary.",
       "localFix": "The cdp input mode: normalise + compile a { session?, commands[{method,params?,artifact?}], artifactPath?, timeoutMs } payload with 8 validation rules, no I/O. Wired as a host-only kind so the wrapper's argv guards are skipped, matching vault/login/devServer.",
@@ -220,7 +220,7 @@
         "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js": "f229d890a2329fa9ced442413bf640962d8c8ea8d84b85e66b4ddaf4b576fe8e"
+        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js": "2edb52d992061d398b99a7a8185e04e65460033a2ff7a2484e6fadc1c87cce5e"
       },
       "upstreamDefect": "Same gap as P-W14-cdp-mode, on the execution side: there was no way to speak CDP to the already-running browser. The CLI does expose `get cdp-url`, so the endpoint is reachable through the normal spawn pipeline, but nothing consumed it.",
       "localFix": "Resolves the endpoint via the injected dispatch (get cdp-url, so redaction and the ledger still apply), opens one WebSocket from the Node 22 global, sends the commands sequentially on one connection, and returns per-command results in order. Heavy payloads go to artifactPath instead of inline. webSocketImpl is injectable so the offline test never opens a socket. No new dependency.",

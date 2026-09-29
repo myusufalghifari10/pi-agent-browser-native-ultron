@@ -120,7 +120,7 @@ function withDeadline(promise, budgetMs) {
  * the injected `webSocketImpl` constructor, so the offline test drives this whole path with a stub
  * and never opens a real socket.
  */
-async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, timeoutMs, webSocketImpl }) {
+async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetId: targetIdHint, timeoutMs, webSocketImpl }) {
     const socket = new webSocketImpl(cdpUrl);
     const pending = new Map();
     let nextId = 0;
@@ -177,15 +177,45 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, timeout
         if (openResult?.error) {
             throw { category: "upstream-error", message: `Could not connect to the browser CDP endpoint: ${summarizeCdpError(openResult.error)}. The browser may have closed; retry or relaunch the session.` };
         }
+        const sendCommand = async (method, params, sessionId, budget) => {
+            const id = ++nextId;
+            const answer = new Promise((resolve) => pending.set(id, resolve));
+            socket.send(JSON.stringify({ id, method, ...(sessionId ? { sessionId } : {}), ...(params === undefined ? {} : { params }) }));
+            return await withDeadline(answer, budget);
+        };
+        // local patch (wave14b): `get cdp-url` returns the BROWSER-level endpoint. Page-scoped domains
+        // (Runtime, DOM, Input, Page, and per-page Network) only exist on a TARGET session, so the very
+        // first live test - Runtime.evaluate - came back -32601 "wasn't found" even though the socket and
+        // the connection were both fine. So: attach to a page target up front, route every command through
+        // that session, and retry once on the browser session when a command answers -32601. That keeps
+        // Target.*/Browser.* working without the caller having to know which domain lives where.
+        let pageSessionId;
+        const attachBudget = Math.min(CDP_DEFAULT_CONNECT_TIMEOUT_MS, remainingMs(deadline));
+        let targetId = targetIdHint;
+        if (!targetId) {
+            const probe = await sendCommand("Target.getTargets", {}, undefined, attachBudget);
+            if (probe !== CDP_DEADLINE_EXPIRED && !probe?.error && Array.isArray(probe?.result?.targetInfos)) {
+                const page = probe.result.targetInfos.find((info) => info.type === "page");
+                if (page?.targetId) targetId = page.targetId;
+            }
+        }
+        if (targetId) {
+            const attached = await sendCommand("Target.attachToTarget", { flatten: true, targetId }, undefined, attachBudget);
+            if (attached !== CDP_DEADLINE_EXPIRED && !attached?.error && typeof attached?.result?.sessionId === "string") {
+                pageSessionId = attached.result.sessionId;
+            }
+        }
         for (const [index, command] of commands.entries()) {
             const budget = remainingMs(deadline);
             if (budget <= 0) {
                 throw { category: "timeout", message: `The cdp budget of ${timeoutMs} ms expired before command ${index} (${command.method}) was sent.` };
             }
-            const id = ++nextId;
-            const answer = new Promise((resolve) => pending.set(id, resolve));
-            socket.send(JSON.stringify({ id, method: command.method, ...(command.params === undefined ? {} : { params: command.params }) }));
-            const reply = await withDeadline(answer, budget);
+            let reply = await sendCommand(command.method, command.params, pageSessionId, budget);
+            // -32601 on the page session means the method is browser-scoped. Retry once un-attached
+            // rather than making the model know the domain map.
+            if (reply !== CDP_DEADLINE_EXPIRED && reply?.error?.code === -32601 && pageSessionId) {
+                reply = await sendCommand(command.method, command.params, undefined, remainingMs(deadline));
+            }
             if (reply === CDP_DEADLINE_EXPIRED) {
                 throw { category: "timeout", message: `Command ${index} (${command.method}) did not answer within the remaining cdp budget of ${timeoutMs} ms.` };
             }
@@ -230,6 +260,10 @@ export async function handleCdpHostInput({ compiled, dispatch, signal, webSocket
     const commands = Array.isArray(compiled?.commands) ? compiled.commands.filter((command) => isRecord(command)) : [];
     const timeoutMs = Number.isFinite(compiled?.timeoutMs) && compiled.timeoutMs > 0 ? compiled.timeoutMs : CDP_DEFAULT_TIMEOUT_MS;
     const artifactPath = compiled?.artifactPath;
+    // local patch (wave14b): an explicit targetId lets the caller pick a tab. Without it the handler
+    // attaches to the first page target the browser reports, which is the right default for a
+    // single-window session and keeps the common case zero-config.
+    const targetId = compiled?.targetId;
 
     if (commands.length === 0) {
         return buildCdpResult({ cdp: { elapsedMs: Date.now() - startedAt, reason: "no-commands" }, isError: true, failureCategory: "validation-error", lines: ["cdp needs at least one command. Pass cdp: { commands: [{ method: \"Domain.command\" }] }."] });
@@ -278,6 +312,7 @@ export async function handleCdpHostInput({ compiled, dispatch, signal, webSocket
         cdpUrl,
         commands,
         deadline,
+        targetId: typeof targetId === "string" && targetId.length > 0 ? targetId : undefined,
         timeoutMs,
         webSocketImpl,
     });

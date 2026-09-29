@@ -19,7 +19,11 @@ export const CDP_MAX_COMMANDS = 32;
 export const CDP_MAX_SESSION_CHARS = 64;
 export const CDP_MAX_TIMEOUT_MS = 120000;
 export const CDP_DEFAULT_TIMEOUT_MS = 30000;
-export const CDP_ALLOWED_FIELDS = new Set(["session", "commands", "artifactPath", "timeoutMs"]);
+// local patch (wave14b): targetId added after the first live test. `get cdp-url` hands back the
+// BROWSER endpoint, and page-scoped domains only exist on a target session, so the handler now
+// attaches to a page target. An explicit targetId lets the caller choose which tab when the
+// browser has more than one page open.
+export const CDP_ALLOWED_FIELDS = new Set(["session", "commands", "artifactPath", "timeoutMs", "targetId"]);
 export const CDP_ALLOWED_COMMAND_FIELDS = new Set(["method", "params", "artifact"]);
 
 // CDP methods are `Domain.command`; the dot is mandatory because it is the only thing distinguishing
@@ -47,6 +51,26 @@ function validateSession(value) {
     }
     if (/\s/.test(trimmed) || trimmed.includes("\u0000")) {
         return { error: "cdp.session must not contain whitespace or NUL bytes." };
+    }
+    return { value: trimmed };
+}
+
+function validateTargetId(value) {
+    if (value === undefined) {
+        return {};
+    }
+    // Chrome target ids are 32 uppercase hex characters, but the check stays shape-agnostic on
+    // purpose: a wrong id must come back as CDP's own "No target with given id" rather than a
+    // wrapper guess about the format.
+    if (typeof value !== "string" || value.trim().length === 0) {
+        return { error: "cdp.targetId must be a non-empty string when provided." };
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > 128) {
+        return { error: "cdp.targetId must be 128 characters or fewer." };
+    }
+    if (/\s/.test(trimmed) || trimmed.includes("\u0000")) {
+        return { error: "cdp.targetId must not contain whitespace or NUL bytes." };
     }
     return { value: trimmed };
 }
@@ -177,12 +201,19 @@ export function normalizeCdpInput(input, { sessionMode } = {}) {
     if (timeoutMs.error) {
         return timeoutMs;
     }
+    const targetId = validateTargetId(input.targetId);
+    if (targetId.error) {
+        return targetId;
+    }
     const value = { commands: commands.value, timeoutMs: timeoutMs.value };
     if (session.value !== undefined) {
         value.session = session.value;
     }
     if (artifactPath.value !== undefined) {
         value.artifactPath = artifactPath.value;
+    }
+    if (targetId.value !== undefined) {
+        value.targetId = targetId.value;
     }
     return { value };
 }
@@ -200,6 +231,9 @@ export function compileAgentBrowserCdp(input) {
     }
     if (plan.artifactPath !== undefined) {
         compiled.artifactPath = plan.artifactPath;
+    }
+    if (plan.targetId !== undefined) {
+        compiled.targetId = plan.targetId;
     }
     return compiled;
 }
