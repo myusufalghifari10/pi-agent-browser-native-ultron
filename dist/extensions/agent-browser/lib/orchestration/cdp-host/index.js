@@ -30,6 +30,12 @@ const CDP_ENDPOINT_PLACEHOLDER = "[cdp-endpoint-redacted]";
 // A deadline expiry resolves as this sentinel, not as a reply: comparing against `undefined` would
 // let the sentinel fall through and be reported as a successful command with no result.
 const CDP_DEADLINE_EXPIRED = Symbol("cdp-deadline-expired");
+// local patch (wave17): the caller walking away is not a command that failed to answer. Racing the
+// signal against every wait is what makes the two reportable at all - without it an abort could
+// only ever be seen before the first byte went out, and Ctrl-C mid-run was indistinguishable from a
+// browser that went quiet. Same sentinel discipline as the deadline: resolve, never throw, so the
+// wait cannot reject out from under the caller.
+const CDP_ABORTED = Symbol("cdp-aborted");
 
 function summarizeCdpError(error) {
     if (typeof error === "string") {
@@ -105,14 +111,35 @@ function remainingMs(deadline) {
     return Math.max(0, deadline - Date.now());
 }
 
-function withDeadline(promise, budgetMs) {
+function withDeadline(promise, budgetMs, signal) {
     let timer;
-    return Promise.race([
+    let onAbort;
+    const racers = [
         promise,
         new Promise((resolve) => {
             timer = setTimeout(() => resolve(CDP_DEADLINE_EXPIRED), Math.max(1, budgetMs));
         }),
-    ]).finally(() => clearTimeout(timer));
+    ];
+    if (signal) {
+        racers.push(new Promise((resolve) => {
+            // The already-aborted case still needs a listener round trip: cancelling an
+            // already-aborted signal is a no-op, so the race has to resolve on its own.
+            if (signal.aborted) {
+                resolve(CDP_ABORTED);
+                return;
+            }
+            onAbort = () => resolve(CDP_ABORTED);
+            signal.addEventListener("abort", onAbort, { once: true });
+        }));
+    }
+    return Promise.race(racers).finally(() => {
+        clearTimeout(timer);
+        // Otherwise every wait leaves a listener behind on the caller's signal, and a long command
+        // list would pin hundreds of dead listeners (plus their closures) until the signal is GC'd.
+        if (onAbort) {
+            signal.removeEventListener("abort", onAbort);
+        }
+    });
 }
 
 /**
@@ -120,7 +147,7 @@ function withDeadline(promise, budgetMs) {
  * the injected `webSocketImpl` constructor, so the offline test drives this whole path with a stub
  * and never opens a real socket.
  */
-async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetId: targetIdHint, timeoutMs, webSocketImpl }) {
+async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, signal, targetId: targetIdHint, timeoutMs, webSocketImpl }) {
     const socket = new webSocketImpl(cdpUrl);
     const pending = new Map();
     let nextId = 0;
@@ -167,10 +194,18 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetI
 
     const results = [];
     const rows = [];
+    // `timeout` is kept as the category because that is what the contract already promised for an
+    // interrupted cdp run; `aborted: true` is what lets the caller tell the model WHY. A cancelled
+    // run is not a command that failed to answer, and telling the model it was sends it off to
+    // retry a call the caller has already abandoned.
+    const cancelled = (where) => ({ aborted: true, category: "timeout", message: `The cdp run was cancelled (${where}); the browser CDP socket was closed and no further commands were sent.` });
     let failure;
     try {
         const connectBudget = Math.min(CDP_DEFAULT_CONNECT_TIMEOUT_MS, remainingMs(deadline));
-        const openResult = await withDeadline(opened, connectBudget);
+        const openResult = await withDeadline(opened, connectBudget, signal);
+        if (openResult === CDP_ABORTED) {
+            throw cancelled("while connecting to the browser CDP endpoint");
+        }
         if (openResult === CDP_DEADLINE_EXPIRED) {
             throw { category: "timeout", message: `The CDP socket did not open within ${connectBudget} ms.` };
         }
@@ -181,7 +216,7 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetI
             const id = ++nextId;
             const answer = new Promise((resolve) => pending.set(id, resolve));
             socket.send(JSON.stringify({ id, method, ...(sessionId ? { sessionId } : {}), ...(params === undefined ? {} : { params }) }));
-            return await withDeadline(answer, budget);
+            return await withDeadline(answer, budget, signal);
         };
         // local patch (wave14b): `get cdp-url` returns the BROWSER-level endpoint. Page-scoped domains
         // (Runtime, DOM, Input, Page, and per-page Network) only exist on a TARGET session, so the very
@@ -194,6 +229,9 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetI
         let targetId = targetIdHint;
         if (!targetId) {
             const probe = await sendCommand("Target.getTargets", {}, undefined, attachBudget);
+            if (probe === CDP_ABORTED) {
+                throw cancelled("while looking for a page target");
+            }
             if (probe !== CDP_DEADLINE_EXPIRED && !probe?.error && Array.isArray(probe?.result?.targetInfos)) {
                 const page = probe.result.targetInfos.find((info) => info.type === "page");
                 if (page?.targetId) targetId = page.targetId;
@@ -201,11 +239,19 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetI
         }
         if (targetId) {
             const attached = await sendCommand("Target.attachToTarget", { flatten: true, targetId }, undefined, attachBudget);
+            if (attached === CDP_ABORTED) {
+                throw cancelled("while attaching to the page target");
+            }
             if (attached !== CDP_DEADLINE_EXPIRED && !attached?.error && typeof attached?.result?.sessionId === "string") {
                 pageSessionId = attached.result.sessionId;
             }
         }
         for (const [index, command] of commands.entries()) {
+            // Before the budget check: if the caller already left, there is nothing left to run, and
+            // reporting "the budget expired" would be a lie about a run that was cancelled on purpose.
+            if (signal?.aborted) {
+                throw cancelled(`before command ${index} (${command.method})`);
+            }
             const budget = remainingMs(deadline);
             if (budget <= 0) {
                 throw { category: "timeout", message: `The cdp budget of ${timeoutMs} ms expired before command ${index} (${command.method}) was sent.` };
@@ -215,6 +261,9 @@ async function runCdpSession({ artifactPath, cdpUrl, commands, deadline, targetI
             // rather than making the model know the domain map.
             if (reply !== CDP_DEADLINE_EXPIRED && reply?.error?.code === -32601 && pageSessionId) {
                 reply = await sendCommand(command.method, command.params, undefined, remainingMs(deadline));
+            }
+            if (reply === CDP_ABORTED) {
+                throw cancelled(`while waiting for command ${index} (${command.method})`);
             }
             if (reply === CDP_DEADLINE_EXPIRED) {
                 throw { category: "timeout", message: `Command ${index} (${command.method}) did not answer within the remaining cdp budget of ${timeoutMs} ms.` };
@@ -312,6 +361,7 @@ export async function handleCdpHostInput({ compiled, dispatch, signal, webSocket
         cdpUrl,
         commands,
         deadline,
+        signal,
         targetId: typeof targetId === "string" && targetId.length > 0 ? targetId : undefined,
         timeoutMs,
         webSocketImpl,
@@ -322,7 +372,7 @@ export async function handleCdpHostInput({ compiled, dispatch, signal, webSocket
     const summary = `cdp: ${commands.length} command(s) on ${CDP_MARKER} in ${elapsedMs} ms.`;
 
     if (run.failure) {
-        cdp.reason = run.failure.category === "timeout" ? "timeout" : "session-failed";
+        cdp.reason = run.failure.aborted === true ? "aborted" : run.failure.category === "timeout" ? "timeout" : "session-failed";
         return buildCdpResult({
             cdp,
             isError: true,

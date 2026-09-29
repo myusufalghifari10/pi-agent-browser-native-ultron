@@ -220,7 +220,7 @@
         "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js": "2edb52d992061d398b99a7a8185e04e65460033a2ff7a2484e6fadc1c87cce5e"
+        "dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js": "31ec14681f51368fa573952afeaf28a3323e79da91f724366735e5a834229f32"
       },
       "upstreamDefect": "Same gap as P-W14-cdp-mode, on the execution side: there was no way to speak CDP to the already-running browser. The CLI does expose `get cdp-url`, so the endpoint is reachable through the normal spawn pipeline, but nothing consumed it.",
       "localFix": "Resolves the endpoint via the injected dispatch (get cdp-url, so redaction and the ledger still apply), opens one WebSocket from the Node 22 global, sends the commands sequentially on one connection, and returns per-command results in order. Heavy payloads go to artifactPath instead of inline. webSocketImpl is injectable so the offline test never opens a socket. No new dependency.",
