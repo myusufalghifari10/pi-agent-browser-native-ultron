@@ -1,6 +1,7 @@
 import { isRecord, parseRefId } from "../../parsing.js";
 import { redactSensitiveText } from "../../runtime.js";
 import { withOptionalSessionArgs } from "../../results/next-actions.js";
+import { collectScrimBlockerDiagnostic } from "./diagnostics.js";
 import { runSessionCommandData } from "./session-state.js";
 const CLICK_DISPATCH_MARKER_PREFIX = "__piAgentBrowserClickDispatchProbe_";
 const CLICK_DISPATCH_CLEANUP_TIMEOUT_MS = 2_000;
@@ -162,6 +163,13 @@ function redactClickDispatchTarget(target) {
 export function formatClickDispatchDiagnosticText(diagnostic) {
     return `Click dispatch diagnostic: ${diagnostic.summary}`;
 }
+function toScrimProbeTarget(target) {
+    if (target.kind === "xpath" || target.kind === "selector")
+        return { kind: target.kind, selector: target.selector };
+    if (target.kind === "accessible" && target.role && target.name)
+        return { kind: "ref", name: target.name, role: target.role };
+    return undefined;
+}
 export function buildClickDispatchNextActions(options) {
     const retryArgs = options.commandTokens[0] === "click" || options.commandTokens[0] === "find" ? options.commandTokens : ["click", ...options.commandTokens];
     const actions = [
@@ -173,6 +181,15 @@ export function buildClickDispatchNextActions(options) {
             tool: "agent_browser",
         },
     ];
+    if (options.diagnostic?.scrimBlocker) {
+        actions.push({
+            id: "inspect-scrim-blocker-after-dispatch-miss",
+            params: { args: withOptionalSessionArgs(options.sessionName, ["snapshot", "-i"]) },
+            reason: `A role-less full-viewport scrim covers ${Math.round(options.diagnostic.scrimBlocker.coverage.width * 100)}%x${Math.round(options.diagnostic.scrimBlocker.coverage.height * 100)}% of the viewport at the target's click point. Inspect or dismiss that element; repeating the click cannot reach the target.`,
+            safety: "Read-only snapshot; the wrapper never re-clicks a covered target automatically.",
+            tool: "agent_browser",
+        });
+    }
     if (options.diagnostic?.scrollContainer) {
         actions.push({
             id: "scroll-target-into-view-after-dispatch-miss",
@@ -232,6 +249,7 @@ export async function collectClickDispatchDiagnostic(options) {
         return undefined;
     const nativeEventCount = typeof result.nativeEventCount === "number" ? result.nativeEventCount : 0;
     const scrollContainer = getClickDispatchScrollContainerDiagnostic(result);
+    const scrimBlocker = await collectScrimBlockerDiagnostic({ cwd: options.cwd, namespace: options.namespace, probeTarget: toScrimProbeTarget(options.probe.target), sessionName: options.sessionName, signal: options.signal });
     const targetLabel = "no trusted DOM event reached the selected element";
     const summary = scrollContainer
         ? `Upstream click reported success but ${targetLabel}. ${scrollContainer.summary}`
@@ -239,6 +257,7 @@ export async function collectClickDispatchDiagnostic(options) {
     return {
         nativeEventCount,
         reason: "native-click-produced-no-target-dom-event",
+        ...(scrimBlocker ? { blockerKind: scrimBlocker.blockerKind, scrimBlocker } : {}),
         ...(scrollContainer ? { scrollContainer } : {}),
         status,
         summary,
