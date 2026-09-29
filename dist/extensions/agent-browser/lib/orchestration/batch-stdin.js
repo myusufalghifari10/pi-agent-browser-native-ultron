@@ -79,21 +79,18 @@ function validateUserBatchStep(step, index) {
             ok: false,
         };
     }
-    // Local patch (wave 7, live on When2meet): a numeric token is coerced, not rejected. Coordinates are
-    // the single most common batch payload after a ref click - `["mouse","move",338,234]`,
-    // `["mouse","wheel","-120"]` - and the error that used to fire ("token 2 must be a string") reads like
-    // a broken tool rather than a quoting rule, so the model rewrote the payload instead of quoting it.
-    // Only finite numbers are coerced; null, objects, arrays, booleans, NaN and Infinity stay errors,
-    // because those are genuine shape mistakes rather than unquoted numerics.
-    const isCoercibleNumber = (token) => typeof token === "number" && Number.isFinite(token);
-    const invalidTokenIndex = step.findIndex((token) => typeof token !== "string" && !isCoercibleNumber(token));
+    // Every token must be a string. The wave-7 numeric-token coercion was DELETED here: the Pi host
+    // validates the `stdin` tool param as an array-of-string-arrays before this function ever runs
+    // ("invalid type: integer 489, expected a string"), so a numeric token cannot reach it on this host.
+    // The error still names the offending type so a genuine shape mistake stays diagnosable.
+    const invalidTokenIndex = step.findIndex((token) => typeof token !== "string");
     if (invalidTokenIndex !== -1) {
         return {
-            error: `agent_browser batch stdin step ${index} token ${invalidTokenIndex} must be a string${step[invalidTokenIndex] === null || typeof step[invalidTokenIndex] === "object" || typeof step[invalidTokenIndex] === "boolean" ? " (got " + (step[invalidTokenIndex] === null ? "null" : Array.isArray(step[invalidTokenIndex]) ? "an array" : typeof step[invalidTokenIndex]) + ")" : ""}. Finite numbers are accepted.${BATCH_STDIN_EXAMPLE}`,
+            error: `agent_browser batch stdin step ${index} token ${invalidTokenIndex} must be a string${step[invalidTokenIndex] === null || typeof step[invalidTokenIndex] === "object" || typeof step[invalidTokenIndex] === "boolean" ? " (got " + (step[invalidTokenIndex] === null ? "null" : Array.isArray(step[invalidTokenIndex]) ? "an array" : typeof step[invalidTokenIndex]) + ")" : ""}.${BATCH_STDIN_EXAMPLE}`,
             ok: false,
         };
     }
-    return { ok: true, step: step.map((token) => (typeof token === "string" ? token : String(token))) };
+    return { ok: true, step };
 }
 export function parseBatchStdinJsonArray(stdin) {
     if (stdin === undefined) {
