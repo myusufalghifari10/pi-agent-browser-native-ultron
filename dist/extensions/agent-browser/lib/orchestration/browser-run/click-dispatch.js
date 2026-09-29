@@ -138,10 +138,19 @@ const finish = (payload) => {
   try { delete window[marker]; } catch {}
   return payload;
 };
-if (!state || !Array.isArray(state.events)) return finish({ status: "probe-missing", nativeEventCount: 0 });
-const nativeEventCount = state.events.filter((event) => event && event.isTrusted === true && event.targetMatched === true).length;
-if (nativeEventCount > 0) return finish({ status: "native-event-observed", nativeEventCount, target: state.target });
-return finish({ status: "no-native-event-observed", nativeEventCount, target: state.target });
+if (!state || !Array.isArray(state.events)) return finish({ status: "probe-missing", nativeEventCount: 0, pressEventCount: 0, terminalEventCount: 0 });
+const matched = state.events.filter((event) => event && event.isTrusted === true && event.targetMatched === true);
+// A press that starts is NOT proof that the click landed. Only a terminal event
+// (pointerup/mouseup/click reaching the target) proves the gesture completed.
+// Counting pointerdown/mousedown here hid every silent block where the target was
+// re-rendered or moved between press and release - see wave12 test + DEATHS.
+const PRESS_EVENTS = new Set(["pointerdown", "mousedown"]);
+const terminalEventCount = matched.filter((event) => !PRESS_EVENTS.has(event.type)).length;
+const pressEventCount = matched.length - terminalEventCount;
+const counts = { nativeEventCount: matched.length, pressEventCount, terminalEventCount };
+if (terminalEventCount > 0) return finish({ status: "native-event-observed", ...counts, target: state.target });
+if (pressEventCount > 0) return finish({ status: "press-observed-click-missing", ...counts, target: state.target });
+return finish({ status: "no-native-event-observed", ...counts, target: state.target });
 })()`;
 }
 function buildClickDispatchProbeCleanupScript(probe) {
@@ -228,17 +237,30 @@ export async function collectClickDispatchDiagnostic(options) {
         return undefined;
     options.probe.cleaned = true;
     const status = typeof result.status === "string" ? result.status : undefined;
-    if (status !== "no-native-event-observed")
+    const PRESS_ONLY_MISS = "press-observed-click-missing";
+    if (status !== "no-native-event-observed" && status !== PRESS_ONLY_MISS)
         return undefined;
     const nativeEventCount = typeof result.nativeEventCount === "number" ? result.nativeEventCount : 0;
+    const pressEventCount = typeof result.pressEventCount === "number" ? result.pressEventCount : 0;
+    const terminalEventCount = typeof result.terminalEventCount === "number" ? result.terminalEventCount : 0;
     const scrollContainer = getClickDispatchScrollContainerDiagnostic(result);
-    const targetLabel = "no trusted DOM event reached the selected element";
-    const summary = scrollContainer
-        ? `Upstream click reported success but ${targetLabel}. ${scrollContainer.summary}`
-        : `Upstream click reported success but ${targetLabel}. Gather evidence with snapshot or page-change checks, then retry upstream click or report the workflow issue; the wrapper does not replay clicks in-page.`;
+    // Pressing without a completing click is the signature of a target that moved or was
+    // re-rendered between mousedown and mouseup, so say that instead of the generic miss.
+    const pressOnly = status === PRESS_ONLY_MISS;
+    const targetLabel = pressOnly
+        ? `the press registered on the element (${pressEventCount} press event(s)) but the click never completed`
+        : "no trusted DOM event reached the selected element";
+    const summary = pressOnly
+        ? `Upstream click reported success but ${targetLabel} (0 terminal events). The element was most likely re-rendered, replaced, or moved between press and release - re-snapshot to get fresh refs, then click the new node by its current position.`
+        : scrollContainer
+            ? `Upstream click reported success but ${targetLabel}. ${scrollContainer.summary}`
+            : `Upstream click reported success but ${targetLabel}. Gather evidence with snapshot or page-change checks, then retry upstream click or report the workflow issue; the wrapper does not replay clicks in-page.`;
     return {
         nativeEventCount,
-        reason: "native-click-produced-no-target-dom-event",
+        ...(pressEventCount > 0 ? { pressEventCount } : {}),
+        ...(terminalEventCount > 0 ? { terminalEventCount } : {}),
+        reason: pressOnly ? "native-press-without-terminal-click-event" : "native-click-produced-no-target-dom-event",
+        ...(pressOnly ? { pressOnly: true } : {}),
         ...(scrollContainer ? { scrollContainer } : {}),
         status,
         summary,

@@ -178,6 +178,22 @@
         "dist/extensions/agent-browser/lib/process.js": "ac976a2f61bc578fca2152265d1cd46fd5626545f96a5e4dff379feaaca55267"
       },
       "upstreamDefect": "No structural guard existed against local-patch clobbering: an update could overwrite the 28 hand-applied patches and the wrapper would keep spawning silently (pre-spawn verifyPatchLedger gate)."
+    },
+    {
+      "id": "P-W12-dispatch",
+      "patches": [
+        "W12-dispatch-terminal-event"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js": "2050d5d7320e76388691809fefdd61f0ffb62d6914381c3c1e2721f6d6f219a0"
+      },
+      "upstreamDefect": "The click-dispatch probe counted EVERY trusted event that reached the target equally, so a bare pointerdown satisfied it. Any target that was re-rendered or moved between mousedown and mouseup therefore read as a successful dispatch, hiding the single most common real-browser false success: upstream reports 'Clicked: @eN', the app does nothing.",
+      "localFix": "The probe now separates press events (pointerdown/mousedown) from terminal ones (pointerup/mouseup/click) and only a terminal event clears a miss. Press-without-terminal is reported as the distinct status press-observed-click-missing and named as such in the summary, so the caller is told the element was re-rendered or moved instead of receiving the generic no-event wording. No synthetic click is ever dispatched.",
+      "verifiedOffline": "tests-v2/wave12-press-vs-terminal-click.mjs",
+      "verifiedLive": "pending — needs a full Pi restart (dist/ is loaded at startup)"
     }
   ]
 }
