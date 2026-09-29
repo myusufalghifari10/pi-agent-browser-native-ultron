@@ -1,8 +1,31 @@
 import { isRecord } from "../parsing.js";
+import { withOptionalSessionArgs } from "../results/next-actions.js";
 import { summarizeNetworkFailures } from "../results/network.js";
 import { getBatchResultItems, getCommandNameFromBatchItem, getSelectValues } from "./shared.js";
 import { compileAgentBrowserSemanticAction } from "./semantic-action.js";
 import { AGENT_BROWSER_JOB_STEP_ACTIONS, AGENT_BROWSER_JOB_TYPE_DELAYED_TEXT_MAX_CHARACTERS, AGENT_BROWSER_QA_LOAD_STATES, } from "./types.js";
+// wave9 (open loop W-O1): an optional `session` on job/qa makes the compiled batch run on a
+// caller-named session instead of the implicit pi-root session. It is a GLOBAL argv flag, so it
+// only changes compiled args — the batch stdin step rows stay byte-identical. MAX_SESSION_CHARS
+// mirrors vault-mode.js and checkpoint.js.
+const MAX_SESSION_CHARS = 64;
+function normalizeOptionalJobSession(input, label) {
+    const value = input.session;
+    if (value === undefined) {
+        return {};
+    }
+    if (typeof value !== "string" || value.trim().length === 0) {
+        return { error: `${label} must be a non-empty string when provided.` };
+    }
+    const trimmed = value.trim();
+    if (trimmed.length > MAX_SESSION_CHARS) {
+        return { error: `${label} must be ${MAX_SESSION_CHARS} characters or fewer.` };
+    }
+    if (/\s/.test(trimmed) || trimmed.includes("\u0000")) {
+        return { error: `${label} must not contain whitespace or NUL bytes.` };
+    }
+    return { value: trimmed };
+}
 function getRequiredJobString(step, field, action) {
     const value = step[field];
     if (typeof value !== "string" || value.trim().length === 0) {
@@ -223,6 +246,10 @@ export function compileAgentBrowserJob(input) {
         return { error: "job.failFast must be a boolean when provided." };
     }
     const failFast = rawFailFast !== false;
+    const session = normalizeOptionalJobSession(input, "job.session");
+    if (session.error) {
+        return { error: session.error };
+    }
     const rawSteps = input.steps;
     if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
         return { error: "job.steps must be a non-empty array." };
@@ -250,7 +277,7 @@ export function compileAgentBrowserJob(input) {
             return { error: compiledStep.error.startsWith(`job.steps[${index}]`) ? compiledStep.error : `job.steps[${index}]: ${compiledStep.error}` };
         steps.push({ action: jobAction, args: compiledStep.args, generatedFrom: compiledStep.generatedFrom }, ...(compiledStep.extraSteps ?? []), ...probeSteps.rows);
     }
-    return { compiled: { args: failFast ? ["batch", "--bail"] : ["batch"], failFast, stdin: JSON.stringify(steps.map((step) => step.args)), steps } };
+    return { compiled: { args: withOptionalSessionArgs(session.value, failFast ? ["batch", "--bail"] : ["batch"]), failFast, stdin: JSON.stringify(steps.map((step) => step.args)), steps } };
 }
 // FINAL-DESIGN.md pillar A reshape item 2 (§5 step 4): receipts for job-mode verification probes.
 // Probe rows sit in compiled.steps right after their owning step, so batch rows correlate by
@@ -536,6 +563,10 @@ export function compileAgentBrowserQaPreset(input) {
     if (!isRecord(input)) {
         return { error: "qa must be an object." };
     }
+    const session = normalizeOptionalJobSession(input, "qa.session");
+    if (session.error) {
+        return { error: session.error };
+    }
     const attached = input.attached === true;
     if (input.attached !== undefined && typeof input.attached !== "boolean") {
         return { error: "qa.attached must be a boolean when provided." };
@@ -610,7 +641,7 @@ export function compileAgentBrowserQaPreset(input) {
         steps.push({ action: "screenshot", args: ["screenshot", screenshotPath] });
     return {
         compiled: {
-            args: ["batch", "--bail"],
+            args: withOptionalSessionArgs(session.value, ["batch", "--bail"]),
             checks: { attached, checkConsole, checkErrors, checkNetwork, diagnosticsResetAtStart, expectedSelector, expectedText, loadState, screenshotPath, url: normalizedUrl },
             failFast: true,
             stdin: JSON.stringify(steps.map((step) => step.args)),
