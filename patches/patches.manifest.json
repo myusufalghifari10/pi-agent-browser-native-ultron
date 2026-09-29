@@ -43,7 +43,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "1e93268f16a30a9e3587ecdb22502ab1f944eb282d02b24f8860cd0384ea2ac4"
       },
       "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding → Missing 'path' parameter; path-like operand → Invalid session name).",
-      "verifiedLive": "2026-09-30: wave19 re-pinned after the checkpoint open-row fix; see tests-v2/wave19-checkpoint-open.mjs. The restore open-row fix is pending its own live verification."
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30 (wave19): restore of a checkpoint saved with url now runs FOUR steps - state load, open http://127.0.0.1:8742, get url, snapshot - and get url returns the SAVED ORIGIN, not the profile start page. Confirmed independently: the restored session answered location.href = the origin and h1 = ORIGIN-19-MARKER. Negative control: a checkpoint with no url/origin now fails with checkpoint-reauth-required and states that the post-restore snapshot proves nothing, instead of the old false \"Login evidence: page rendered\"."
     },
     {
       "id": "P9-output",
