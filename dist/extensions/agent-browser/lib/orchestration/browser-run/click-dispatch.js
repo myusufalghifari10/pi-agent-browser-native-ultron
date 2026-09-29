@@ -248,7 +248,7 @@ export async function collectClickDispatchDiagnostic(options) {
     // re-rendered between mousedown and mouseup, so say that instead of the generic miss.
     const pressOnly = status === PRESS_ONLY_MISS;
     const targetLabel = pressOnly
-        ? `the press registered on the element (${pressEventCount} press event(s)) but the click never completed`
+        ? `the press reached the element (${pressEventCount} press event(s)) and the click never completed (0 terminal events)`
         : "no trusted DOM event reached the selected element";
     const summary = pressOnly
         ? `Upstream click reported success but ${targetLabel} (0 terminal events). The element was most likely re-rendered, replaced, or moved between press and release - re-snapshot to get fresh refs, then click the new node by its current position.`
