@@ -268,11 +268,11 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js": "7118aee4a96051d8cacf4f462bc3f183040f7f73a743be23063aac1dd6e97bdc"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js": "96005870cd3ea1524de356d4140b11810766e99051a720432ed211eb58ab62dd"
       },
       "upstreamDefect": "Not an upstream defect - a wrapper-local default that was never measured. DEFAULT_SNAPSHOT_DELTA_MIN_LINES was 2000, which only fires on the 4000+ node class, so an ordinary large page (github: 732 rendered lines, ~24k chars, ~6k tokens) re-rendered in full on every snapshot. Measured 2026-09-30 with the cdp escape hatch: tokopedia 253 lines, github 732, wikipedia 3238. Lowered to 600. The file was also previously un-ledgered, so drift in it was invisible to the integrity check.",
       "offlineTest": "tests-v2/wave2-f-snapshot-delta.mjs",
-      "verifiedLive": "measured live (node + rendered-line counts on three real sites); the threshold change itself needs a restart to observe a real delta"
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30: the first attempt (600, tuned on FULL-snapshot line counts) never fired - the delta gate requires snapshot -i. Retuned to 400 on measured INTERACTIVE counts (tokopedia 251, github 426, wikipedia 1600); the old 2000 sat above all three so the feature was dead."
     }
   ]
 }
