@@ -9,7 +9,7 @@ import { buildInspectOverlayStateAction, buildNextToolAction, withOptionalSessio
 import { buildVisibleRefFallbackDiagnosticFromSnapshot, getVisibleRefFallbackTarget } from "../../results/selector-recovery.js";
 import { extractRefSnapshotFromData, isAboutBlankUrl, normalizeComparableUrl } from "../../session-page-state.js";
 import { redactInvocationArgs, redactSensitiveText } from "../../runtime.js";
-import { isRecord, parseRefId } from "../../parsing.js";
+import { isRecord } from "../../parsing.js";
 import { extractBatchResultCommand, extractNavigationSummaryFromData, extractStringResultField, findElectronLaunchRecordForSession, runSessionCommandData, } from "./session-state.js";
 import { getUpstreamEffectiveBatchSteps } from "../batch-stdin.js";
 import { getExplicitArtifactDestination } from "./artifact-paths.js";
@@ -264,8 +264,6 @@ function getOverlayBlockerCandidates(snapshotData) {
     return candidates;
 }
 export function formatOverlayBlockerText(diagnostic) {
-    if (diagnostic?.blockerKind === "scrim")
-        return ["Possible overlay blockers:", ...formatScrimBlockerRows(diagnostic), "Inspect the blocker (refresh refs, read the element) before deciding on any further click; the wrapper does not replay blocked clicks."].join("\n");
     return ["Possible overlay blockers:", ...diagnostic.candidates.map((candidate) => `- ${candidate.ref}${candidate.role ? ` ${candidate.role}` : ""}${candidate.name ? ` ${JSON.stringify(candidate.name)}` : ""}: ${candidate.reason}`)].join("\n");
 }
 export function buildOverlayBlockerNextActions(options) {
@@ -289,137 +287,9 @@ export async function collectOverlayBlockerDiagnostic(options) {
         return undefined;
     const snapshotData = await runSessionCommandData({ args: ["snapshot", "-i"], cwd: options.cwd, namespace: options.namespace, sessionName: options.sessionName, signal: options.signal });
     const diagnostic = collectSnapshotOverlayBlockerDiagnostic(snapshotData);
-    if (diagnostic)
-        return { ...diagnostic, summary: `Click completed but the page stayed on ${currentUrl}; a fresh snapshot contains likely overlay close/dismiss controls.` };
-    return collectScrimBlockerDiagnostic({ clicked: options.data.clicked, cwd: options.cwd, namespace: options.namespace, sessionName: options.sessionName, signal: options.signal, snapshotData });
-}
-// A role-less scrim (Thumbtack 2026-09-29: position:fixed; z-index:200; 0,0,1536x734; pointer-events:auto;
-// rgba(0,0,0,0.5)) blocks a click while the snapshot reports no dialog, so the dialog-based detector above
-// never runs. Diagnostic only: this never re-clicks anything.
-const SCRIM_VIEWPORT_COVERAGE_RATIO = 0.8;
-const SCRIM_PROBE_ROW_LIMIT = 8;
-export function isFullViewportScrimBlocker(descriptor) {
-    if (!isRecord(descriptor) || descriptor.isTarget === true)
-        return false;
-    if (descriptor.position !== "fixed" || typeof descriptor.pointerEvents !== "string" || descriptor.pointerEvents === "none")
-        return false;
-    const coverage = descriptor.coverage;
-    if (!isRecord(coverage) || typeof coverage.width !== "number" || typeof coverage.height !== "number")
-        return false;
-    return coverage.width >= SCRIM_VIEWPORT_COVERAGE_RATIO && coverage.height >= SCRIM_VIEWPORT_COVERAGE_RATIO;
-}
-function buildScrimProbeTargetExpression(target) {
-    if (target.kind === "xpath")
-        return `(() => { try { return document.evaluate(${JSON.stringify(target.selector)}, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null).singleNodeValue; } catch { return null; } })()`;
-    if (target.kind === "selector")
-        return `(() => { try { return document.querySelector(${JSON.stringify(target.selector)}); } catch { return null; } })()`;
-    const role = JSON.stringify(target.role);
-    const expectedName = JSON.stringify(normalizeScrimProbeName(target.name));
-    return `(() => {
-  const normalize = (value) => String(value ?? "").replace(/\\s+/g, " ").trim();
-  const inferRole = (element) => {
-    const explicit = element.getAttribute("role");
-    if (explicit) return explicit;
-    const tagName = element.tagName.toLowerCase();
-    if (tagName === "button" || tagName === "select" || tagName === "textarea") return tagName;
-    if (tagName === "a" && element.hasAttribute("href")) return "link";
-    if (tagName === "input") return ["button", "submit", "reset", "image"].includes((element.getAttribute("type") || "text").toLowerCase()) ? "button" : "";
-    return "";
-  };
-  const inferName = (element) => normalize(element.getAttribute("aria-label") || element.getAttribute("title") || element.value || element.textContent || "");
-  const isVisible = (element) => {
-    const style = window.getComputedStyle(element);
-    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
-    return element.getClientRects().length > 0;
-  };
-  const candidates = Array.from(document.querySelectorAll("button,a[href],input,select,textarea,summary,[role],[onclick],[tabindex]")).filter((element) => inferRole(element) === ${role} && inferName(element) === ${expectedName} && isVisible(element));
-  return candidates.length === 1 ? candidates[0] : null;
-})()`;
-}
-function normalizeScrimProbeName(name) {
-    return String(name ?? "").replace(/\s+/g, " ").trim();
-}
-export function buildScrimProbeScript(target) {
-    return `(() => {
-const target = ${buildScrimProbeTargetExpression(target)};
-if (!(target instanceof Element)) return { status: "target-not-found" };
-const rect = target.getBoundingClientRect();
-if (rect.width <= 0 || rect.height <= 0) return { status: "target-not-visible" };
-const cx = rect.left + rect.width / 2;
-const cy = rect.top + rect.height / 2;
-const viewportWidth = window.innerWidth || 0;
-const viewportHeight = window.innerHeight || 0;
-if (viewportWidth <= 0 || viewportHeight <= 0) return { status: "no-viewport" };
-const ratio = (value, total) => Math.round((value / total) * 1000) / 1000;
-const rows = document.elementsFromPoint(cx, cy).slice(0, ${SCRIM_PROBE_ROW_LIMIT}).map((element, index) => {
-  const style = window.getComputedStyle(element);
-  const box = element.getBoundingClientRect();
-  return {
-    backgroundColor: String(style.backgroundColor || "").slice(0, 40),
-    coverage: { height: ratio(box.height, viewportHeight), width: ratio(box.width, viewportWidth) },
-    index,
-    isTarget: element === target,
-    pointerEvents: style.pointerEvents,
-    position: style.position,
-    tag: element.tagName.toLowerCase(),
-    zIndex: style.zIndex,
-  };
-});
-return { status: "ok", rows };
-})()`;
-}
-function parseScrimProbeRows(data) {
-    const result = isRecord(data) && isRecord(data.result) ? data.result : undefined;
-    if (!isRecord(result) || result.status !== "ok" || !Array.isArray(result.rows))
-        return [];
-    return result.rows.filter((row) => isRecord(row) && typeof row.tag === "string" && typeof row.position === "string" && typeof row.pointerEvents === "string" && isRecord(row.coverage));
-}
-function formatScrimBlockerRows(diagnostic) {
-    return diagnostic.blockers.map((blocker, index) => `- [${index}] ${blocker.tag} position=${blocker.position} z-index=${blocker.zIndex ?? "auto"} pointer-events=${blocker.pointerEvents} coverage=${Math.round(blocker.coverage.width * 100)}%x${Math.round(blocker.coverage.height * 100)}% background=${blocker.backgroundColor || "none"}`);
-}
-export function buildScrimBlockerDiagnosticFromProbe(data) {
-    const rows = parseScrimProbeRows(data);
-    if (rows.length === 0)
+    if (!diagnostic)
         return undefined;
-    const blockers = rows.filter(isFullViewportScrimBlocker);
-    if (blockers.length === 0)
-        return undefined;
-    const coverage = blockers[0].coverage;
-    return {
-        blockerKind: "scrim",
-        blockers,
-        candidates: [],
-        coverage,
-        summary: `An element covers ${Math.round(coverage.width * 100)}% of viewport width and ${Math.round(coverage.height * 100)}% of viewport height at the target's click point, but the accessibility snapshot exposes no dialog; treat it as a role-less full-viewport scrim and inspect it instead of repeating the click.`,
-    };
-}
-function getScrimProbeTargetFromClick(clicked, snapshotData) {
-    if (typeof clicked !== "string" || clicked.length === 0)
-        return undefined;
-    if (clicked.startsWith("xpath="))
-        return { kind: "xpath", selector: redactSensitiveText(clicked.slice("xpath=".length)) };
-    const refId = parseRefId(clicked) ?? clicked.match(/^ref=(e\d+)$/)?.[1];
-    if (refId) {
-        const ref = extractRefSnapshotFromData(snapshotData)?.refs?.[refId];
-        if (!ref || typeof ref.role !== "string" || typeof ref.name !== "string")
-            return undefined;
-        return { kind: "ref", name: redactSensitiveText(ref.name), role: ref.role };
-    }
-    if (/^[-@]/.test(clicked) || selectorMayExposeSensitiveLiteral(clicked))
-        return undefined;
-    return { kind: "selector", selector: redactSensitiveText(clicked) };
-}
-export async function collectScrimBlockerDiagnostic(options) {
-    const target = options.probeTarget ?? getScrimProbeTargetFromClick(options.clicked, options.snapshotData);
-    if (!target)
-        return undefined;
-    try {
-        const data = await runSessionCommandData({ args: ["eval", "--stdin"], cwd: options.cwd, namespace: options.namespace, sessionName: options.sessionName, signal: options.signal, stdin: buildScrimProbeScript(target) });
-        return buildScrimBlockerDiagnosticFromProbe(data);
-    }
-    catch {
-        return undefined;
-    }
+    return { ...diagnostic, summary: `Click completed but the page stayed on ${currentUrl}; a fresh snapshot contains likely overlay close/dismiss controls.` };
 }
 const SELECTOR_TEXT_VISIBILITY_CANDIDATE_LIMIT = 8;
 function buildVisibleTextProbeScript(selector) {

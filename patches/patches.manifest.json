@@ -1,7 +1,7 @@
 {
   "version": 1,
   "algorithm": "sha256",
-  "description": "Patch Integrity Ledger: sha256 of every file that intentionally diverges from pristine pi-agent-browser-native 0.6.13 (see PATCHES.md). Drift is a hard pre-spawn refusal \u2014 re-apply per PATCHES.md, no silent fallback. Re-pin hashes only from a verified tree after re-applying patches. There is no P4 (see PATCHES.md).",
+  "description": "Patch Integrity Ledger: sha256 of every file that intentionally diverges from pristine pi-agent-browser-native 0.6.13 (see PATCHES.md). Drift is a hard pre-spawn refusal — re-apply per PATCHES.md, no silent fallback. Re-pin hashes only from a verified tree after re-applying patches. There is no P4 (see PATCHES.md).",
   "entries": [
     {
       "id": "P2",
@@ -14,7 +14,7 @@
       "sha256": {
         "dist/extensions/agent-browser/lib/launch-scoped-flags.js": "455bf0f9995573aca8669b2fdef24532b5f61fbaa8deb9455fca82175ca0366d"
       },
-      "upstreamDefect": "Launch-scoped flags were only guarded for managed sessions and 11 flags went unrecognized (LAUNCH_SCOPED_FLAGS 26 \u2192 37)."
+      "upstreamDefect": "Launch-scoped flags were only guarded for managed sessions and 11 flags went unrecognized (LAUNCH_SCOPED_FLAGS 26 → 37)."
     },
     {
       "id": "P5",
@@ -42,7 +42,7 @@
       "sha256": {
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "400b3f0feb25f75f3a676c0fa483cdfe32f384ec9857cc999a7afcb01a27b9cc"
       },
-      "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding \u2192 Missing 'path' parameter; path-like operand \u2192 Invalid session name)."
+      "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding → Missing 'path' parameter; path-like operand → Invalid session name)."
     },
     {
       "id": "P9-output",
@@ -81,7 +81,7 @@
       "sha256": {
         "dist/extensions/agent-browser/lib/orchestration/browser-run/geolocation-stub.js": "1592e348f80ff68bb757de6fbe663fe10488f606c88a543bd92fb9d138b27a2f"
       },
-      "upstreamDefect": "set geo never granted the geolocation permission; this new module installs the page-level navigator.geolocation stub (getCurrentPosition/watchPosition/clearWatch, permissions.query \u2192 granted)."
+      "upstreamDefect": "set geo never granted the geolocation permission; this new module installs the page-level navigator.geolocation stub (getCurrentPosition/watchPosition/clearWatch, permissions.query → granted)."
     },
     {
       "id": "P2b",
@@ -149,7 +149,7 @@
       "sha256": {
         "dist/extensions/agent-browser/index.js": "b8429a99b9ca7cea4fdbc0f1e3f1147f11e3b01197afca96acbdff0947ae1a57"
       },
-      "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage \u2014 current shape maintained in playbook.js, see PATCHES.md)."
+      "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md)."
     },
     {
       "id": "P-W11-batch",
@@ -163,21 +163,6 @@
         "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "79bd79d938ae3c31bf2c93480dc2b3059fc1c6d603458825971d6fa6cf2bbeac"
       },
       "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type."
-    },
-    {
-      "id": "P-W10-scrim",
-      "patches": [
-        "P-W10-scrim"
-      ],
-      "files": [
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/diagnostics.js",
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js"
-      ],
-      "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/diagnostics.js": "96c34ee478b562ee2bb89d9f0300b30c83efff17ae5b29a3708d8116e0abcff8",
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/click-dispatch.js": "aed21b2ca4574175e9aa3c1e26260f7b017b7d2ee3435256c2531cb31ad1964c"
-      },
-      "upstreamDefect": "The overlay-blocker diagnostic gated on a snapshot ref with role alertdialog/dialog, so a full-viewport scrim (position:fixed, no role, pointer-events:auto) was never detected and the agent blamed the wrong element. Adds an exported pure scrim predicate, an elementsFromPoint probe builder, and a scrim branch; diagnostic only, it never re-clicks."
     },
     {
       "id": "PL1",
