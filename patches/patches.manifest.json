@@ -209,7 +209,7 @@
       "upstreamDefect": "Nothing: this file is new and local. The upstream agent-browser CLI exposes no raw CDP surface, and its command list belongs to a third-party binary the wrapper cannot extend. Yusuf's requirement was an agent able to drive the browser freely, so the wrapper needed a channel past the CLI's command vocabulary.",
       "localFix": "The cdp input mode: normalise + compile a { session?, commands[{method,params?,artifact?}], artifactPath?, timeoutMs } payload with 8 validation rules, no I/O. Wired as a host-only kind so the wrapper's argv guards are skipped, matching vault/login/devServer.",
       "verifiedOffline": "tests-v2/wave14-cdp-input-mode.mjs (28 assertion groups)",
-      "verifiedLive": "pending — needs a full Pi restart"
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30 (wave14b): Runtime.evaluate works after the attach handshake; multi-command ordering; artifact written; bogus method fails naming the method; Browser.getVersion falls back to the browser session; cdp+args rejected."
     },
     {
       "id": "P-W14-cdp-host",
@@ -225,7 +225,7 @@
       "upstreamDefect": "Same gap as P-W14-cdp-mode, on the execution side: there was no way to speak CDP to the already-running browser. The CLI does expose `get cdp-url`, so the endpoint is reachable through the normal spawn pipeline, but nothing consumed it.",
       "localFix": "Resolves the endpoint via the injected dispatch (get cdp-url, so redaction and the ledger still apply), opens one WebSocket from the Node 22 global, sends the commands sequentially on one connection, and returns per-command results in order. Heavy payloads go to artifactPath instead of inline. webSocketImpl is injectable so the offline test never opens a socket. No new dependency.",
       "verifiedOffline": "tests-v2/wave14-cdp-host.mjs",
-      "verifiedLive": "pending — needs a full Pi restart"
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30 (wave14b): attach handshake, artifact on disk, -32601 browser-session fallback, and the 35/35 no-regression after the wave17 abort refactor. The ABORT PATH ITSELF is offline-verified only - it cannot be triggered from the tool interface without cancelling the call from outside. wave17 abort semantics remain offline-verified only."
     },
     {
       "id": "P-W15-unknown-flag",
@@ -237,7 +237,7 @@
         "dist/extensions/agent-browser/lib/argv-grammar.js": "2f09b1dbf9c95c0529325b533cb222c76cb51a0d60b8396f47a63fe72a29ab14"
       },
       "offlineTest": "tests-v2/wave15-unknown-flag.mjs",
-      "verifiedLive": "pending - needs a full Pi restart",
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30: --nonsense-flag refused instantly naming the flag; --new-tabs produced \"Did you mean --new-tab?\"; real short and long flags (snapshot -i, --quiet, --session) all still work.",
       "patches": [
         "W15-unknown-flag-guard"
       ],
@@ -256,7 +256,7 @@
       },
       "upstreamDefect": "agent-browser's `find` takes the FIRST match and offers no visibility filter, so it lands on hidden 0x0 duplicates - `find text \"Run\"` once clicked a hidden duplicate instead of the real 71x32 button. Measured consequence: 169 of 435 eval --stdin calls in the 14 use-case sweep (39%) were the model re-deriving the same candidate walk in JavaScript by hand, precisely because `find` could not be trusted. The upstream CLI cannot be changed from here, but the wrapper can own the JavaScript, so `act` generates it once.",
       "offlineTest": "tests-v2/wave16-act.mjs",
-      "verifiedLive": "pending - needs a full Pi restart"
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30: on a real fixture, considered 6 / visible 5 / matched 1 proved the visibility filter drops a display:none duplicate; two visible \"Publish\" returned status ambiguous with both rects and NO clicked flag; a later read proved log stayed \"-\" so the refusal was real; read+limit reported truncated with totalChars; role:link matched a bare <a>. The click was verified through the page state (DETAILS-CLICKED), not the tool's own \"clicked\": true. Known scope limit found live: the candidate selector covers interactive elements only, so act cannot read a plain <div>."
     }
   ]
 }
