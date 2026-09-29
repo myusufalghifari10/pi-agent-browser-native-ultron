@@ -22,7 +22,11 @@ assert.equal(manifest.version, 1);
 const ids = manifest.entries.map((entry) => entry.id);
 assert.equal(new Set(ids).size, ids.length, "entry ids must be unique");
 assert.ok(!ids.includes("P4"), "there is no P4 in the patch numbering");
-assert.equal(manifest.entries.length, 12, "11 divergent files + PL1 self-coverage");
+// 12 -> 14 entries in wave10+11: P-W10-scrim and P-W11-batch pin files that the
+// ledger had never covered, so their local changes were invisible to drift detection.
+// This count is a deliberate tripwire - adding a ledger entry must mean consciously
+// updating it here, not silently growing the audited set.
+assert.equal(manifest.entries.length, 14, "13 divergent files + PL1 self-coverage");
 for (const entry of manifest.entries) {
     assert.ok(Array.isArray(entry.files) && entry.files.length > 0, `${entry.id} lists files`);
     assert.ok(Array.isArray(entry.patches) && entry.patches.length > 0, `${entry.id} lists patch ids`);
@@ -56,4 +60,4 @@ assert.deepEqual(result, { ok: true, skipped: false, drifted: [], missing: [], m
 // 5. Manifest + hashes are cached in module scope: second call returns the identical verdict.
 assert.equal(await verifyPatchLedger(), result);
 
-console.log("wave1-a-patch-ledger: all assertions passed (12 entries, gate before spawn, verdict cached)");
+console.log("wave1-a-patch-ledger: all assertions passed (14 entries, gate before spawn, verdict cached)");
