@@ -988,6 +988,7 @@ These modes exist only in this local copy (`PATCHES.md` P11–P22). Each one is 
 | `vault` | `action` (`status`/`list`/`save`/`fill`/`totp`/`remove`/`unlock`) plus `handle`, `origin`, `type`, `username`, `label`, `secret`, `otpSeed`, `card`, `address`, `fields`, `visibleFields`, `submit`, `overwrite`, `promptIfMissing`, `minutes`, `session` (fill/totp only; local patch P27) | Local encrypted credential vault. `list` returns metadata only; `fill`/`totp` write into the page from a page script (never argv) after an exact-origin check; `save`/`unlock` use a masked prompt; card fills require an interactive confirmation. |
 | `devServer` | `action` (`detect`/`wait`/`start`/`stop`/`status`), `command`, `port`, `url`, `timeoutMs` | Local dev server lifecycle. The wrapper only ever owns processes it started itself; a port that is already answering is reported, never adopted or killed. |
 | `login` | `url`, `origin`, `handle`, `username`, `usernameSelector`, `passwordSelector`, `otpSelector`, `submitSelector`, `submit`, `waitForUrl`, `waitForText`, `loadStatePath`, `saveStatePath`, `timeoutMs`, `session` (local patch P27) | Login preset compiled into one fail-fast batch with the vault credential injected through the page script. |
+| `cdp` | `session`, `commands` (each `{ method, params?, artifact? }`), `artifactPath`, `timeoutMs` (30000) | Raw Chrome DevTools Protocol escape hatch. Sends `commands` sequentially over one CDP connection to the target session's browser endpoint; use it for CDP domains the `agent-browser` command surface does not expose (Memory, extension control, PWA, audit). |
 
 New top-level fields that apply to any mode:
 
@@ -1014,6 +1015,39 @@ Credential-vault commands (host-side, no browser session needed except for fills
 **Storage:** `~/.pi/agent/pi-agent-browser-native/vault.json` plus `vault.key` (both mode 0600, directory 0700). Override the
 directory with `PI_AGENT_BROWSER_VAULT_DIR`, or use a passphrase instead of the key file with
 `PI_AGENT_BROWSER_VAULT_PASSPHRASE`. A group/other-readable vault refuses to open instead of being repaired.
+
+### Raw CDP escape hatch (`cdp`)
+
+`cdp` is the one mode that talks to the browser over the Chrome DevTools Protocol directly instead of
+going through the `agent-browser` command surface. It exists because the wrapper is a pass-through: it
+can only refuse, validate, or format an upstream command, never add a capability. Anything the upstream
+CLI has no word for is reachable here.
+
+```json
+{ "cdp": { "session": "ultron1", "commands": [
+  { "method": "Runtime.evaluate", "params": { "expression": "document.title", "returnByValue": true } },
+  { "method": "HeapProfiler.takeHeapSnapshot", "params": {}, "artifact": "heap.heapsnapshot" }
+] } }
+```
+
+- Shape: `session` (optional, ≤ 64 chars, defaults to the managed session), `commands` (required,
+  1–32 entries), `artifactPath` (directory for artifacts), `timeoutMs` (positive integer, ≤ 120000,
+  default 30000). Any other field — at the top level or inside a command — is rejected by name.
+- `method` must be a `Domain.command` string; a bare domain or a method with whitespace is a
+  validation error, not a runtime failure. `params` must be a plain object when present.
+- `session` combined with a top-level `sessionMode: "fresh"` is rejected, the same rule the `login`
+  preset follows.
+- The endpoint comes from the existing `get cdp-url` command for that session, so the call reuses the
+  normal spawn, redaction, and ledger paths. If no endpoint is available, the call fails as an
+  upstream error naming `get cdp-url`; it does not hang.
+- One connection, commands sent sequentially, results returned in the order the commands were given.
+  A failing command does not erase the successful ones: the result carries `index`, `method`, and the
+  error message per command alongside the successful payloads, and the call is marked an error.
+- Heavy payloads (heap snapshots, traces, HAR-like dumps) belong in `artifact`: with `artifactPath` set,
+  the payload is written to `<artifactPath>/<artifact>` and the result reports the **path**, never the
+  raw body. An `artifact` without `artifactPath` is a validation error.
+- Summaries live in `details.cdp` (`endpoint`, `commandCount`, per-command results, `elapsedMs`); the
+  raw `webSocketDebuggerUrl` is kept out of model-facing text.
 
 ### Checkpoint (auth-snapshots)
 
@@ -1242,6 +1276,9 @@ Other useful environment variables include `AGENT_BROWSER_DEFAULT_TIMEOUT`, `AGE
 - **The click-dispatch diagnostic only covers a top-level `click`.** `getClickDispatchProbeTarget` requires `commandTokens[0] === "click"`, so a click issued as a step inside a `batch` (or a `job`) can never carry a probe, and no `Click dispatch diagnostic:` line will ever appear for it. The batch step may still report its own `Mutation evidence` note. If you want dispatch verification, issue the `snapshot -i` and the `click` as two top-level calls so the session keeps the ref snapshot the probe needs.
 - A click can report success while the application changed nothing. The wrapper probes for this and reports `press-observed-click-missing` when the press reached the element but no terminal event (pointerup/mouseup/click) did — the signature of a target that was re-rendered, replaced, or moved between press and release. Trust that diagnostic over the `Clicked:` line, and re-snapshot for fresh refs rather than clicking the same ref again.
 - **The first line of a navigation result is the document *title*, not page text.** `open`, `goto`, and the navigation step of a batch print `title` then `url`, e.g. `Example Domain` / `https://example.com/`. A title match is not proof that the string exists in the body: `example.com` keeps "Example Domain" as its `<title>` while its body starts "This domain is for use in documentation examples..." and contains no `<h1>` at all. A `wait --text` on the title then correctly times out, so do not read the title line as a failed text assertion — read the body (`eval` on `document.body.innerText`) before concluding anything about visible text.
+- **`cdp` is a RAW escape hatch and the wrapper's argv guards do NOT apply inside it.** Unlike every other mode, `cdp` does not go through argv dispatch: whatever `method`/`params` you send reach the browser as-is, so flag-shaped argument guards, selector safety, and page-target checks that protect normal calls are not enforced here. Use it deliberately, and prefer the normal commands when they already cover the task.
+- The endpoint is not invented separately: the wrapper reads it from the existing `get cdp-url` command for the target session, so the call keeps the normal spawn, redaction, and ledger paths.
+- Heavy payloads (heap snapshots, traces) must go to `artifactPath`, never inline in `content`.
 - The extension may keep following one implicit managed session across later tool calls.
 - If launch-scoped flags like `--profile`, `--args`, `--user-agent`, `--executable-path`, `--ca-cert`, `--no-ca-cert`, `--webgpu`, `--no-webmcp`, `--restore`, `--restore-save`, restore check flags, `--namespace`, `--session-name`, `--cdp`, `--state`, `--auto-connect`, `--init-script`, `--enable`, `--provider` / `-p`, or provider device flags like `--device` would replace or be ignored by an already-active managed session, retry with `sessionMode: "fresh"`. When the call explicitly names the current managed session, the structured recovery payload removes that `--session` so the fresh rotation can succeed.
 - If a `sessionMode: "fresh"` call fails (including upstream failure, timeout, missing binary, or **`qa`** reclassification after a nominally successful batch), read `details.managedSessionOutcome` before assuming where the next default call will go: `preserved` means the prior managed session remains current, while `abandoned` means no managed session became current. When the failure reason is not the fresh launch itself—for example `failureCategory: "qa-failure"`—`status`/`summary` may still describe the managed-session transition while `succeeded` on this object matches the final tool outcome.
