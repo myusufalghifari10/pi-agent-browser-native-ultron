@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "9775ad58706f1a60639733e727304d8890ffaaabf08a89697b800e6ace8a49ee"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "e0cc7ba458b8bac5eeecf593ef45711d5e84f35ce097cc3c1cbfc930256b8cf1"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },

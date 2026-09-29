@@ -183,6 +183,34 @@ function getWaitFlagGrammarError(commandTokens, stdin) {
     }
     return undefined;
 }
+// local patch (wave8 live-sweep W8-1): `type` takes two arguments — selector and text. A
+// one-argument call is parsed as `type <sel>` with an empty text payload, and upstream still
+// prints a success-shaped "Typed: " line with nothing written (observed live on a Monaco editor
+// at OneCompiler, where the model stayed at its template and the run failed). Reject the
+// one-argument form with the real grammar so a no-op never looks like a completed step.
+const TYPE_ARITY_GRAMMAR_MESSAGE = [
+    "agent-browser `type` needs two arguments — the element then the text: {\"args\":[\"type\",\"#email\",\"hello\"]}.",
+    "To type into whatever already has focus (a code editor, a date field) use the keyboard form: {\"args\":[\"keyboard\",\"type\",\"hello\"]}.",
+    "A one-argument call is read as a selector with empty text and reports a misleading \"Typed: \" line while writing nothing.",
+].join(" ");
+function isTypeArityMisuseStep(step) {
+    return Array.isArray(step) && step[0] === "type" && step.length < 3;
+}
+function getTypeArityGrammarError(commandTokens, stdin) {
+    if (!Array.isArray(commandTokens) || commandTokens.length === 0)
+        return undefined;
+    const descriptor = parseArgvDescriptor(commandTokens);
+    if (descriptor.commandInfo.command === "type" && descriptor.upstreamCommandTokens.length < 3)
+        return TYPE_ARITY_GRAMMAR_MESSAGE;
+    if (descriptor.commandInfo.command !== "batch")
+        return undefined;
+    const steps = getUpstreamEffectiveBatchSteps(descriptor.commandTokens, stdin);
+    for (let index = 0; index < steps.length; index += 1) {
+        if (isTypeArityMisuseStep(steps[index]))
+            return `${TYPE_ARITY_GRAMMAR_MESSAGE} (Blocked batch step ${index + 1}.)`;
+    }
+    return undefined;
+}
 function getStateClearBlockError(commandTokens, stdin) {
     if (!Array.isArray(commandTokens) || commandTokens.length === 0)
         return undefined;
@@ -331,7 +359,7 @@ export function resolveAgentBrowserInput(options) {
         // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
         // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
         // validated by normalizeCheckpointInput above.
-        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? getTypeArityGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }
