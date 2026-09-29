@@ -197,7 +197,24 @@ function buildSnapshotDiff(previous, current) {
 // The tracked refSnapshot always stays the FULL new snapshot; only the presented text shrinks.
 const SNAPSHOT_DELTA_MODE_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA";
 const SNAPSHOT_DELTA_MIN_LINES_ENV = "PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES";
-const DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 2000;
+// Measured 2026-09-30 with the cdp escape hatch (document.querySelectorAll('*').length for node
+// counts, the rendered snapshot JSON for line counts):
+//   tokopedia   624 nodes   56 refs   253 lines
+//   github     1809 nodes  141 refs   732 lines  (~24k chars, ~6k tokens per re-snapshot)
+//   wikipedia  4164 nodes  547 refs  3238 lines
+// The previous 2000 only fired on the 4000+ node class, so an ordinary large page like GitHub
+// re-rendered in full every single time. 600 covers that class and still leaves genuinely small
+// pages whole.
+//
+// Why lowering this is safe: the delta is presentation-only. The tracked refSnapshot always stays
+// the FULL new snapshot, so `click @e42` keeps working - only the rendered text shrinks. And the
+// delta only pays off on the SECOND snapshot of a URL anyway: on a first load every ref is "added",
+// so the delta is the whole page. The header names `--delta=full` as the way back.
+//
+// Override with PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES. NOTE: this counts rendered LINES, not
+// DOM nodes - FINAL-DESIGN.md §6 question 2 said "node threshold" and the identical 2000 in both
+// places is a coincidence, not the same unit.
+const DEFAULT_SNAPSHOT_DELTA_MIN_LINES = 600;
 function parseSnapshotDeltaMinLines(value) {
     const parsed = Number(value);
     return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : DEFAULT_SNAPSHOT_DELTA_MIN_LINES;

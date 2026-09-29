@@ -33,14 +33,30 @@ function synthSnapshotData(pairs) {
 const PRIOR_TARGET = { title: "Test Page", url: "https://example.test/app" };
 
 // 1. Policy resolution: env contract.
-assert.deepEqual(resolveSnapshotDeltaPolicy({}), { minLines: 2000, mode: "auto" }, "default is auto @2000 lines");
-assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: " auto " }), { minLines: 2000, mode: "auto" }, "auto is case/whitespace tolerant");
+//
+// The 600 default is measured, not chosen. Rendered snapshot lines on real pages, 2026-09-30:
+// tokopedia 253, github 732 (~24k chars, ~6k tokens per re-snapshot), wikipedia 3238. The old
+// 2000 only fired on the 4000+ node class, so an ordinary large page re-rendered in full every
+// time. These assertions are pinned to the measured number, so changing it is a conscious act.
+assert.deepEqual(resolveSnapshotDeltaPolicy({}), { minLines: 600, mode: "auto" }, "default is auto @600 lines");
+assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: " auto " }), { minLines: 600, mode: "auto" }, "auto is case/whitespace tolerant");
 assert.equal(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "never" }), undefined, "never disables the shim path entirely");
-assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "ALWAYS" }), { minLines: 2000, mode: "always" }, "always applies regardless of size");
+assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "ALWAYS" }), { minLines: 600, mode: "always" }, "always applies regardless of size");
 assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "auto", PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES: "500" }), { minLines: 500, mode: "auto" }, "threshold override");
-assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES: "nope" }), { minLines: 2000, mode: "auto" }, "invalid threshold falls back to default");
-assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES: "0" }), { minLines: 2000, mode: "auto" }, "non-positive threshold falls back to default");
-assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "banana" }), { minLines: 2000, mode: "auto" }, "unknown mode falls back to default auto");
+assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES: "nope" }), { minLines: 600, mode: "auto" }, "invalid threshold falls back to default");
+assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA_MIN_LINES: "0" }), { minLines: 600, mode: "auto" }, "non-positive threshold falls back to default");
+assert.deepEqual(resolveSnapshotDeltaPolicy({ PI_AGENT_BROWSER_SNAPSHOT_DELTA: "banana" }), { minLines: 600, mode: "auto" }, "unknown mode falls back to default auto");
+
+// 1b. The measured threshold actually separates the pages it was measured on.
+{
+    const policy = resolveSnapshotDeltaPolicy({});
+    // github measured 732 lines: with 600 it deltas on re-snapshot, with the old 2000 it never did.
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 732, sameUrl: true }), "delta", "an ordinary large page must deltas, not re-render in full");
+    // tokopedia measured 253: stays whole, because there is nothing to save.
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: true, policy, renderedLines: 253, sameUrl: true }), "full", "a small page must stay whole");
+    // A first snapshot has no prior, so delta could not help even on a huge page.
+    assert.equal(decideSnapshotDeltaPresentation({ deltaFull: false, hasPrior: false, policy, renderedLines: 3238, sameUrl: true }), "passthrough", "no prior snapshot means no delta to compute");
+}
 
 // 2. Rendered line counting: cheap, non-empty lines only.
 assert.equal(countRenderedSnapshotLines("- button \"A\" [ref=e1]\n\n- textbox \"B\" [ref=e2]\n"), 2);

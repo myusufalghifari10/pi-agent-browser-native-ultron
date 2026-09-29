@@ -258,6 +258,21 @@
       "upstreamDefect": "agent-browser's `find` takes the FIRST match and offers no visibility filter, so it lands on hidden 0x0 duplicates - `find text \"Run\"` once clicked a hidden duplicate instead of the real 71x32 button. Measured consequence: 169 of 435 eval --stdin calls in the 14 use-case sweep (39%) were the model re-deriving the same candidate walk in JavaScript by hand, precisely because `find` could not be trusted. The upstream CLI cannot be changed from here, but the wrapper can own the JavaScript, so `act` generates it once.",
       "offlineTest": "tests-v2/wave16-act.mjs",
       "verifiedLive": "LIVE-VERIFIED 2026-09-30: on a real fixture, considered 6 / visible 5 / matched 1 proved the visibility filter drops a display:none duplicate; two visible \"Publish\" returned status ambiguous with both rects and NO clicked flag; a later read proved log stayed \"-\" so the refusal was real; read+limit reported truncated with totalChars; role:link matched a bare <a>. The click was verified through the page state (DETAILS-CLICKED), not the tool's own \"clicked\": true. Known scope limit found live: the candidate selector covers interactive elements only, so act cannot read a plain <div>."
+    },
+    {
+      "id": "P-W20-snapshot-delta-threshold",
+      "patches": [
+        "W20-snapshot-delta-threshold-measured"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare/snapshot-filter.js": "7118aee4a96051d8cacf4f462bc3f183040f7f73a743be23063aac1dd6e97bdc"
+      },
+      "upstreamDefect": "Not an upstream defect - a wrapper-local default that was never measured. DEFAULT_SNAPSHOT_DELTA_MIN_LINES was 2000, which only fires on the 4000+ node class, so an ordinary large page (github: 732 rendered lines, ~24k chars, ~6k tokens) re-rendered in full on every snapshot. Measured 2026-09-30 with the cdp escape hatch: tokopedia 253 lines, github 732, wikipedia 3238. Lowered to 600. The file was also previously un-ledgered, so drift in it was invisible to the integrity check.",
+      "offlineTest": "tests-v2/wave2-f-snapshot-delta.mjs",
+      "verifiedLive": "measured live (node + rendered-line counts on three real sites); the threshold change itself needs a restart to observe a real delta"
     }
   ]
 }

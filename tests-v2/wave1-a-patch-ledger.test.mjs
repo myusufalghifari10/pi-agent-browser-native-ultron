@@ -28,7 +28,7 @@ assert.ok(!ids.includes("P4"), "there is no P4 in the patch numbering");
 // (P-W16-act-mode pins the new act.js).
 // The count is a deliberate tripwire: it must be able to go down as well as
 // up, and any change here should be a conscious decision, never a silent drift of the set.
-assert.equal(manifest.entries.length, 18, "17 divergent files + PL1 self-coverage");
+assert.equal(manifest.entries.length, 19, "18 divergent files + PL1 self-coverage");
 for (const entry of manifest.entries) {
     assert.ok(Array.isArray(entry.files) && entry.files.length > 0, `${entry.id} lists files`);
     assert.ok(Array.isArray(entry.patches) && entry.patches.length > 0, `${entry.id} lists patch ids`);
