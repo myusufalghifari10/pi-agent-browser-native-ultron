@@ -1,5 +1,22 @@
 # Agent Browser command reference
 
+> **Read this before the first `agent_browser` call of a session.**
+>
+> This Pi build hands array and object tool parameters over as JSON strings, and rejects a raw
+> array with `args is not iterable` before the tool even starts. So:
+>
+> ```
+> {"args": "[\"get\",\"url\"]"}                          // argv as a JSON STRING
+> {"job":  "{\"session\":\"ultron1\",\"steps\":[[\"get\",\"url\"]]}"}   // job as a JSON STRING
+> ```
+>
+> Passing `args` as a real array fails with `args is not iterable`; passing `job` as a real object
+> fails with `job.steps must be a non-empty array` **even when `steps` really is a non-empty array**.
+> Both messages point away from the cause. The tool parameter schema states the correct form too,
+> because the schema is read before this file.
+>
+
+
 Related docs:
 - [`../README.md`](../README.md)
 - [`TOOL_CONTRACT.md`](TOOL_CONTRACT.md)
@@ -7,6 +24,7 @@ Related docs:
 - [`ELECTRON.md`](ELECTRON.md)
 - [`RELEASE.md`](RELEASE.md)
 - [`SUPPORT_MATRIX.md`](SUPPORT_MATRIX.md)
+
 
 ## Purpose
 
@@ -1300,7 +1318,7 @@ Other useful environment variables include `AGENT_BROWSER_DEFAULT_TIMEOUT`, `AGE
 
 ## Wrapper-specific behavior worth knowing
 
-- **Pass `args` as a JSON string in this Pi build.** The runtime does not invoke the tool's `prepareArguments` hook, so the wrapper's own self-heal for a host that re-coerces params never runs, and a raw array is rejected by the host's own validator with `args is not iterable` before the tool body executes. `{"args": "[\"get\",\"url\"]"}` works. Behaviour differed before the most recent Pi restart (raw arrays were accepted all session), so re-check if a future restart changes it.
+- **Pass `args` as a JSON string.** This Pi build does not invoke the tool's `prepareArguments` hook, so the wrapper's own self-heal never runs, and a raw array is rejected by the host validator with `args is not iterable` before the tool body executes. `{"args": "[\"get\",\"url\"]"}` works. The `args` description in the tool schema says the same thing — the schema is read before this file, so this line is the fallback, not the first place the constraint appears.
 - **Quote every token inside `batch` stdin.** The host validates `stdin` as an array of *string* arrays before `execute()` runs, so `[["mouse","move",489,119]]` fails with `invalid type: integer` at a byte offset even though the wrapper's own `parseUserBatchStdin` would coerce it to `"489"`. Use `[["mouse","move","489","119"]]`. The wrapper-side coercion still exists (and is unit-tested) for hosts that do not pre-validate, but do not rely on it here.
 - **Pass `job` as a JSON string for the same reason.** `{"job": {"steps": [...]}}` is rejected with `job.steps must be a non-empty array` even though `steps` is a non-empty array; the host re-coerces the nested array exactly as it does `stdin`. Use `{"job": "{\"session\":\"name\",\"steps\":[...]}"}`. Verified with and without `session`, so it is independent of the `session` field.
 - **The click-dispatch diagnostic only covers a top-level `click`.** `getClickDispatchProbeTarget` requires `commandTokens[0] === "click"`, so a click issued as a step inside a `batch` (or a `job`) can never carry a probe, and no `Click dispatch diagnostic:` line will ever appear for it. The batch step may still report its own `Mutation evidence` note. If you want dispatch verification, issue the `snapshot -i` and the `click` as two top-level calls so the session keeps the ref snapshot the probe needs.

@@ -1353,13 +1353,56 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
     });
     pi.on("tool_result", async (event) => buildAgentBrowserToolResultPatch(event));
     // local patch: slim schema — mode names only, no per-field docs; real validation stays in resolveAgentBrowserInput + CLI errors. Guide: docs/COMMAND_REFERENCE.md.
+    // The model reads this schema BEFORE it reads the docs, so an empty `{}` here is worse than a
+    // wrong guess: with no type and no shape it invents one, and it invents `args` as an
+    // array-of-arrays because that is what `stdin` looks like for `batch`. Every mode-object also
+    // has to admit `string`, because this host re-coerces object params to strings too - that is
+    // why `{"job": {...}}` arrives as "job.steps must be a non-empty array" with a perfectly
+    // non-empty array on the other side.
+    // The fallback carries a description too, so a parameter added to the mode list later can
+    // never come back as an undocumented `{}` — which is the exact defect this wave fixes.
+    const STR_OR_OBJ_DOC = { type: ["string", "object"], description: "Mode payload. See COMMAND_REFERENCE.md for this mode's fields." };
+    const STR_OR_ARR = { type: ["string", "array"] };
+    // Bare type pair, used only where a description follows in the spread below.
+    const STR_OR_OBJ = { type: ["string", "object"] };
+    const agentBrowserParamDocs = {
+        args: {
+            type: ["string", "array"],
+            description: 'Raw argv tokens, e.g. ["get","url"] or ["click","@e3"]. THIS HOST REJECTS a raw array with "args is not iterable" before the tool runs, so pass it as a JSON string: {"args":"[\\"get\\",\\"url\\"]"}.',
+        },
+        stdin: {
+            ...STR_OR_ARR,
+            description: 'Batch steps as array-of-arrays, e.g. [["get","url"],["snapshot","-i"]], or a string of free text for `eval`/`script`. Same host coercion as args: prefer a JSON string.',
+        },
+        script: { type: "string", description: "One-shot JavaScript executed against a throwaway session." },
+        timeoutMs: { type: "number", description: "Wall-clock budget for the whole call." },
+        outputPath: { type: "string", description: "Write the result to this file instead of returning it inline." },
+        sessionMode: { type: "string", description: 'Session lifecycle hint, e.g. "fresh" or "auto". Omit to stay attached.' },
+        verbosity: { type: "string", description: "Result verbosity hint." },
+        revealSecrets: { ...STR_OR_OBJ, description: "Return values that normal redaction hides, for a bounded set of matches." },
+        semanticAction: { ...STR_OR_OBJ, description: 'Declarative intent, e.g. {"action":"click","role":"button","name":"Save"}.' },
+        job: { ...STR_OR_OBJ, description: 'Multi-step batch, e.g. {"session":"ultron1","steps":[["get","url"]]}. Pass as a JSON string on this host.' },
+        qa: { ...STR_OR_OBJ, description: "Reset + load + assert preset that compiles to `batch --bail`." },
+        act: { ...STR_OR_OBJ, description: 'Find-and-act in one call, e.g. {"find":{"text":"Reply"},"action":"click"}. Refuses ambiguity instead of guessing.' },
+        cdp: { ...STR_OR_OBJ, description: 'Raw Chrome DevTools Protocol escape hatch, e.g. {"session":"ultron1","commands":[{"method":"Runtime.evaluate","params":{...}}]}. Artifact paths must be RELATIVE.' },
+        vault: { ...STR_OR_OBJ, description: "Credential vault: list, save, fill." },
+        checkpoint: { ...STR_OR_OBJ, description: "Auth-snapshot save / restore / list." },
+        login: { ...STR_OR_OBJ, description: "Login preset for a known site." },
+        electron: { ...STR_OR_OBJ, description: "Drive a desktop app over the accessibility bridge." },
+        debug: { ...STR_OR_OBJ, description: "Diagnostics for a failing command." },
+        settle: { ...STR_OR_OBJ, description: "Wait for a page to stop changing." },
+        networkBody: { ...STR_OR_OBJ, description: "Read a captured response body." },
+        sourceLookup: { ...STR_OR_OBJ, description: "Find a source location in the workspace." },
+        networkSourceLookup: { ...STR_OR_OBJ, description: "Find a source location inside a network response." },
+        devServer: { ...STR_OR_OBJ, description: "Drive the dev server under test." },
+    };
     const AGENT_BROWSER_PARAMS_SLIM = {
         type: "object",
         properties: Object.fromEntries([
             "script", "args", "semanticAction", "qa", "job", "electron", "debug", "settle", "networkBody",
             "vault", "checkpoint", "devServer", "login", "cdp", "act", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
             "stdin", "outputPath", "timeoutMs", "sessionMode",
-        ].map((k) => [k, {}])),
+        ].map((k) => [k, agentBrowserParamDocs[k] ?? STR_OR_OBJ_DOC])),
         additionalProperties: true,
     };
     // wave4 (live-sweep W-N1/W-N1b): the Pi runtime hands raw model params straight to execute and

@@ -148,9 +148,10 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "feaf66a4a169d43f7a4b88650238af9bd27938636a27f377e341e14841e069a1"
+        "dist/extensions/agent-browser/index.js": "23ddf644eaf35c685fd0ca611d6c4f87604f2644d913380a70ef408115871faf"
       },
-      "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md)."
+      "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md).",
+      "verifiedLive": "LIVE: wave21 filled the parameter schema. Another agent session read this guide in full and still could not make a single successful call — args died with \"args is not iterable\", job with \"job.steps must be a non-empty array\" while P28 was fine. Cause: every parameter was declared {} so the model was told the parameter exists and nothing else; it guessed args as an array-of-arrays because that is what stdin looks like for batch, then read the guide, concluded the patch was clobbered, and reported a bug that did not exist. Now each parameter carries a type and a description, and every mode-object admits string|object because this host stringifies object params."
     },
     {
       "id": "P-W11-batch",
@@ -273,6 +274,21 @@
       "upstreamDefect": "Not an upstream defect - a wrapper-local default that was never measured. DEFAULT_SNAPSHOT_DELTA_MIN_LINES was 2000, which only fires on the 4000+ node class, so an ordinary large page (github: 732 rendered lines, ~24k chars, ~6k tokens) re-rendered in full on every snapshot. Measured 2026-09-30 with the cdp escape hatch: tokopedia 253 lines, github 732, wikipedia 3238. Lowered to 600. The file was also previously un-ledgered, so drift in it was invisible to the integrity check.",
       "offlineTest": "tests-v2/wave2-f-snapshot-delta.mjs",
       "verifiedLive": "LIVE-VERIFIED 2026-09-30. Both branches proven in a real browser: wikipedia 547 interactive lines > 400 -> \"Delta snapshot (vs previous): 0 refs changed (547 total)\", 62,223 bytes -> 128 (486x); github 141 lines < 400 -> correctly stays full. Key insight: on the interactive snapshot string one line is one ref, so this is a ref-count threshold. Two earlier tunings (600 on full-snapshot counts, 426/1600 on artifact-wide string counts) were both wrong; only countRenderedSnapshotLines(artifact.snapshot) matches the gate."
+    },
+    {
+      "id": "P-W21-tool-schema",
+      "patches": [
+        "W21-documented-parameter-schema"
+      ],
+      "files": [
+        "tests-v2/wave21-tool-schema.mjs"
+      ],
+      "sha256": {
+        "tests-v2/wave21-tool-schema.mjs": "4e98dc5b2b6b4a2ad37714c448c5d69b0ad41cbc7b3258c97fd00a80ac007c68"
+      },
+      "upstreamDefect": "Not an upstream defect - a local usability defect. The slim schema declared every parameter as an empty object, so the model was told a parameter exists with no type, shape or description. Since the model reads the schema before it reads the docs, the docs cannot fix a wrong guess made from the schema: an agent that read all 2,242 lines still failed every call. Fixed by declaring a type and a one-line description per parameter, and by allowing string on every mode-object since this host re-coerces object params to strings. tests-v2/wave21-tool-schema.mjs asserts this against the real tool definition a host receives, not against source text; a source match would pass while the host kept getting {}.",
+      "offlineTest": "tests-v2/wave21-tool-schema.mjs",
+      "verifiedLive": "needs a full Pi restart — the schema is read when the tool is registered at startup"
     }
   ]
 }
