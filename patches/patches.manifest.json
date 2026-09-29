@@ -40,9 +40,10 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "400b3f0feb25f75f3a676c0fa483cdfe32f384ec9857cc999a7afcb01a27b9cc"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/prepare.js": "1e93268f16a30a9e3587ecdb22502ab1f944eb282d02b24f8860cd0384ea2ac4"
       },
-      "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding → Missing 'path' parameter; path-like operand → Invalid session name)."
+      "upstreamDefect": "state rename <old> <new> failed in every documented form (sessionless forwarding → Missing 'path' parameter; path-like operand → Invalid session name).",
+      "verifiedLive": "2026-09-30: wave19 re-pinned after the checkpoint open-row fix; see tests-v2/wave19-checkpoint-open.mjs. The restore open-row fix is pending its own live verification."
     },
     {
       "id": "P9-output",

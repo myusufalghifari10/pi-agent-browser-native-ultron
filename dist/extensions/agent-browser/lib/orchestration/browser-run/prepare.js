@@ -435,6 +435,24 @@ function formatCheckpointListText(checkpoints) {
     ].join("\n");
 }
 
+/**
+ * Build the restore batch's stdin with the `open <origin>` row spliced in after `state load`.
+ *
+ * Returns undefined - never throws - for anything it cannot handle, because a restore that
+ * cannot name an origin must still attempt as compiled rather than blow up inside a gate.
+ * The gate writes the result into a sink rather than relying on a mutation; see the call site.
+ */
+export function rewriteCheckpointRestoreStdin(stdin, restoreTarget) {
+    if (typeof stdin !== "string" || typeof restoreTarget !== "string" || restoreTarget.length === 0)
+        return undefined;
+    try {
+        const rows = buildRestoreBatchRows(JSON.parse(stdin), restoreTarget);
+        return rows ? JSON.stringify(rows) : undefined;
+    }
+    catch {
+        return undefined;
+    }
+}
 async function tryCheckpointPreSpawnGate(options) {
     const compiled = options.compiledCheckpoint;
     if (!compiled) {
@@ -519,13 +537,15 @@ async function tryCheckpointPreSpawnGate(options) {
         ? checkpointMetadata.url
         : typeof checkpointMetadata.origin === "string" && checkpointMetadata.origin.length > 0 ? checkpointMetadata.origin : undefined;
     if (restoreTarget && typeof compiled.stdin === "string") {
-        try {
-            const rows = buildRestoreBatchRows(JSON.parse(compiled.stdin), restoreTarget);
-            if (rows)
-                compiled.stdin = JSON.stringify(rows);
-        }
-        catch {
-            // Leave the compiled batch untouched; the restore still attempts as compiled.
+        const rewritten = rewriteCheckpointRestoreStdin(compiled.stdin, restoreTarget);
+        if (rewritten) {
+            compiled.stdin = rewritten;
+            // wave19: the caller needs to be told. Mutating compiled.stdin alone is what made
+            // this gate dead code from wave 4 onwards - prepareAgentBrowserArgs had already
+            // frozen the string the spawn reads, and nothing downstream ever looked at
+            // compiled.stdin again. The sink is the only channel still open at this point.
+            if (options.restoreStdinSink)
+                options.restoreStdinSink.stdin = rewritten;
         }
     }
     return undefined;
@@ -622,9 +642,19 @@ export async function prepareBrowserRun(options) {
         // confirmation-gated and only decrypted into the pre-named 0600 temp file once it passes, and
         // the save/restore temp path is registered for exact-value scrubbing (P12) before anything can
         // echo it. Every guard above and below this block is untouched.
-        const checkpointGateResult = await tryCheckpointPreSpawnGate({ args: preparedArgs.args, compiledCheckpoint, cwd, redactedArgs, signal });
+        const restoreStdinSink = {};
+        const checkpointGateResult = await tryCheckpointPreSpawnGate({ args: preparedArgs.args, compiledCheckpoint, cwd, redactedArgs, restoreStdinSink, signal });
         if (checkpointGateResult)
             return { kind: "early-result", result: checkpointGateResult };
+        // wave19: the gate ran AFTER prepareAgentBrowserArgs, so the injected `open <origin>` row
+        // has to be pushed back into both places the spawn can read. Assigning only one of them
+        // reproduces the original bug, because preparedArgs.stdin takes precedence over
+        // runtimeToolStdin at the processStdin line further down.
+        const restoreStdin = restoreStdinSink.stdin;
+        if (typeof restoreStdin === "string" && restoreStdin.length > 0) {
+            runtimeToolStdin = restoreStdin;
+            preparedArgs.stdin = restoreStdin;
+        }
         const routedReadConfirmation = state.sessionPageState.findReadConfirmation(preparedArgs.args, resolveAgentBrowserNamespace(preparedArgs.args, agentBrowserProcessEnv.AGENT_BROWSER_NAMESPACE));
         const readConfirmation = routedReadConfirmation?.capabilities?.readRequiresConfirmation === true ? routedReadConfirmation : undefined;
         let executionPlan = buildExecutionPlan(preparedArgs.args, {
