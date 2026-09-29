@@ -147,7 +147,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "b8429a99b9ca7cea4fdbc0f1e3f1147f11e3b01197afca96acbdff0947ae1a57"
+        "dist/extensions/agent-browser/index.js": "d014c0814bcef82bb885196b9a6f5a881864c45d53df619ebc9dfca15d23b9a1"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md)."
     },

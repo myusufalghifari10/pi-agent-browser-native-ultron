@@ -19,7 +19,6 @@ import { buildPromptPolicy, getLatestUserPrompt, shouldAppendBrowserSystemPrompt
 import { isCloseAllCommand, isCloseCommand } from "./lib/command-taxonomy.js";
 import { hasLaunchScopedFlagToken } from "./lib/launch-scoped-flags.js";
 import { cleanupSecureTempArtifacts } from "./lib/temp.js";
-import { AGENT_BROWSER_PARAMS } from "./lib/input-modes/params.js";
 import { AGENT_BROWSER_SCRIPT_DEFAULT_TIMEOUT_MS, AGENT_BROWSER_SCRIPT_NAMESPACE, createAgentBrowserScriptSessionName, isAgentBrowserScriptSessionName, runAgentBrowserScript, } from "./lib/input-modes/script.js";
 import { closeManagedSession, getSessionContextKey, runAgentBrowserTool } from "./lib/orchestration/browser-run/index.js";
 import { canonicalizeExplicitArtifactDestination, getExplicitArtifactDestination } from "./lib/orchestration/browser-run/artifact-paths.js";
