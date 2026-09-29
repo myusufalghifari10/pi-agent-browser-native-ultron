@@ -24,9 +24,10 @@ assert.equal(new Set(ids).size, ids.length, "entry ids must be unique");
 assert.ok(!ids.includes("P4"), "there is no P4 in the patch numbering");
 // 12 -> 14 in wave10+11 (P-W10-scrim added, P-W11-batch added) -> 13 after the wave-10
 // scrim entry was REVERTED -> 16 in wave14 (P-W14-cdp-mode and P-W14-cdp-host pin two new
-// local files). The count is a deliberate tripwire: it must be able to go down as well as
+// local files) -> 17 in wave15 (P-W15-unknown-flag pins argv-grammar.js, which the guard reads).
+// The count is a deliberate tripwire: it must be able to go down as well as
 // up, and any change here should be a conscious decision, never a silent drift of the set.
-assert.equal(manifest.entries.length, 16, "15 divergent files + PL1 self-coverage");
+assert.equal(manifest.entries.length, 17, "16 divergent files + PL1 self-coverage");
 for (const entry of manifest.entries) {
     assert.ok(Array.isArray(entry.files) && entry.files.length > 0, `${entry.id} lists files`);
     assert.ok(Array.isArray(entry.patches) && entry.patches.length > 0, `${entry.id} lists patch ids`);

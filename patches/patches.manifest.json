@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "9b95c871bb04572356d17bf1e10ce9a1f567fab388a24b17b703f7f19d404ab5"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "3874a4e28503baff67892fdffeca113e2c3eceec240a40e1fd07053b195029a7"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -226,6 +226,22 @@
       "localFix": "Resolves the endpoint via the injected dispatch (get cdp-url, so redaction and the ledger still apply), opens one WebSocket from the Node 22 global, sends the commands sequentially on one connection, and returns per-command results in order. Heavy payloads go to artifactPath instead of inline. webSocketImpl is injectable so the offline test never opens a socket. No new dependency.",
       "verifiedOffline": "tests-v2/wave14-cdp-host.mjs",
       "verifiedLive": "pending — needs a full Pi restart"
+    },
+    {
+      "id": "P-W15-unknown-flag",
+      "summary": "wave15: refuse an unrecognized upstream flag before the spawn, with a near-miss suggestion",
+      "files": [
+        "dist/extensions/agent-browser/lib/argv-grammar.js"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/argv-grammar.js": "2f09b1dbf9c95c0529325b533cb222c76cb51a0d60b8396f47a63fe72a29ab14"
+      },
+      "offlineTest": "tests-v2/wave15-unknown-flag.mjs",
+      "verifiedLive": "pending - needs a full Pi restart",
+      "patches": [
+        "W15-unknown-flag-guard"
+      ],
+      "upstreamDefect": "agent-browser 0.37.0 ignores a flag it does not recognise instead of refusing it, so a mistyped flag produced no error at all: the spawn went out, nothing consumed the flag, and the call sat until the wrapper's 35s watchdog fired and reported 'timeout'. That is the worst possible answer twice over - it burns 35 seconds and it names the wrong cause, so a model repeats the same typo. The wrapper already carries the full upstream flag surface in this file, so the fix is a lookup rather than a new vocabulary."
     }
   ]
 }

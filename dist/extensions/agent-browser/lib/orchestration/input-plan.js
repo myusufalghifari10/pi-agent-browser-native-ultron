@@ -1,3 +1,4 @@
+import { KNOWN_FLAG_NAMES } from "../argv-grammar.js";
 import { parseArgvDescriptor } from "../argv-descriptor.js";
 import { getUpstreamEffectiveBatchSteps, normalizeUrlLessOpen } from "./batch-stdin.js";
 import { isPlainTextInspectionArgs, validateToolArgs, redactInvocationArgs, redactSensitiveText } from "../runtime.js";
@@ -214,6 +215,72 @@ function getTypeArityGrammarError(commandTokens, stdin) {
     }
     return undefined;
 }
+// local patch (wave15): fail fast on a flag upstream does not have.
+//
+// Before this, a mistyped flag was not rejected at all. The spawn went out, upstream ignored
+// the flag it did not recognise, and the call sat there until the 35s wrapper watchdog fired
+// and reported "timeout". That is the worst possible answer twice over: it burns 35 seconds,
+// and it points at the wrong cause, so the model repeats the same typo.
+//
+// The accepted vocabulary is KNOWN_FLAG_NAMES, not the narrower value-flag sets - those were
+// measured to be missing 59 real flags, so trusting them here would refuse correct calls. A
+// near-miss suggestion is included because the common case is a typo, not a flag the model
+// invented: without the suggestion the model has no way to know which real flag it meant.
+// local patch (wave15): these commands take free-text positional arguments, and free text is
+// allowed to begin with "--". A selector, a text argument or a key name has no business being
+// read as a flag, so the guard stands aside for them entirely. This costs typo detection on
+// those commands; it buys never refusing a correct call, and refusing a correct call is the
+// one failure mode that would make this wave worse than the hang it replaces.
+const FREE_TEXT_POSITIONAL_COMMANDS = new Set(["type", "click", "find", "eval", "script", "keyboard", "mouse", "drag", "upload", "select", "wait", "goto", "open"]);
+function getUnknownFlagError(commandTokens) {
+    if (!Array.isArray(commandTokens) || commandTokens.length === 0)
+        return undefined;
+    if (FREE_TEXT_POSITIONAL_COMMANDS.has(parseArgvDescriptor(commandTokens).commandInfo.command))
+        return undefined;
+    for (const token of commandTokens) {
+        if (token === "--")
+            return undefined;
+        if (!token.startsWith("-") || token === "-")
+            continue;
+        // A negative number is a value, not a flag. Coordinates go negative constantly.
+        if (/^-\d/.test(token))
+            continue;
+        if (KNOWN_FLAG_NAMES.has(token))
+            continue;
+        const suggestion = findClosestFlagName(token);
+        return token + " is not a recognized agent-browser flag. "
+            + (suggestion ? "Did you mean " + suggestion + "? " : "")
+            + "Unrecognized flags used to hang until the timeout; this call was refused immediately so the typo is visible. Remove the flag or replace it with one from the command reference.";
+    }
+    return undefined;
+}
+function findClosestFlagName(token) {
+    const ceiling = Math.max(2, Math.floor(token.length / 3));
+    let best;
+    let bestDistance = ceiling + 1;
+    for (const flag of KNOWN_FLAG_NAMES) {
+        if (!flag.startsWith("--"))
+            continue;
+        const distance = editDistance(token, flag);
+        if (distance < bestDistance) {
+            bestDistance = distance;
+            best = flag;
+        }
+    }
+    return bestDistance <= ceiling ? best : undefined;
+}
+function editDistance(a, b) {
+    const cols = b.length + 1;
+    let previous = Array.from({ length: cols }, (_, index) => index);
+    for (let row = 1; row <= a.length; row += 1) {
+        const current = [row];
+        for (let col = 1; col < cols; col += 1) {
+            current[col] = Math.min(previous[col] + 1, current[col - 1] + 1, previous[col - 1] + (a[row - 1] === b[col - 1] ? 0 : 1));
+        }
+        previous = current;
+    }
+    return previous[cols - 1];
+}
 function getStateClearBlockError(commandTokens, stdin) {
     if (!Array.isArray(commandTokens) || commandTokens.length === 0)
         return undefined;
@@ -369,7 +436,7 @@ export function resolveAgentBrowserInput(options) {
         // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
         // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
         // validated by normalizeCheckpointInput above.
-        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? getTypeArityGrammarError(toolArgs, toolStdin) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? getTypeArityGrammarError(toolArgs, toolStdin) ?? getUnknownFlagError(toolArgs) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }
