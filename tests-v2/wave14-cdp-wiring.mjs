@@ -82,6 +82,29 @@ assert.match(index, /await handleCdpHostInput\(\{ compiled: resolvedInput\.compi
 assert.doesNotMatch(index, /new WebSocket|webSocketDebuggerUrl/,
     "index.js must never touch the socket directly; that belongs to the host handler only");
 
+// --- 5. the host must not swallow the cdp param ----------------------------
+// Live lesson, 2026-09-30: with cdp wired in input-plan but absent from these two
+// lists, the live call died with "args must contain at least one agent-browser
+// command token" - the mode looked "not supplied" and the call fell through to
+// args-mode. resolveAgentBrowserInput was verified correct in isolation, so the
+// bug was strictly the host param path.
+const schemaList = index.match(/const AGENT_BROWSER_PARAMS_SLIM = \{[\s\S]*?properties: Object\.fromEntries\(\[([\s\S]*?)\]\.map/);
+assert.ok(schemaList, "the slim schema property list must be findable");
+assert.match(schemaList[1], /"cdp"/,
+    "cdp must be a declared schema property or the host may not pass it through");
+// Anchor on the loop that actually holds the MODE list. A bare `for (const key of [...])`
+// regex binds to the first one in the file, which is the ["args","stdin"] pair loop - that
+// mistake already bit this test once, so the anchor is the list's own distinctive member.
+const keyLoops = [...index.matchAll(/for \(const key of \[([^\]]*?)\]\) \{/g)].map((m) => m[1]);
+const p28List = keyLoops.find((list) => list.includes("networkSourceLookup"));
+assert.ok(p28List, "the P28 de-stringify key list must be findable (anchor: it contains networkSourceLookup)");
+assert.match(p28List, /"cdp"/,
+    "cdp must be in normalizeAgentBrowserParams' parse list, or a stringified cdp payload is never parsed");
+const argsLoop = keyLoops.find((list) => list.includes('"stdin"') && !list.includes("networkSourceLookup"));
+assert.ok(argsLoop, "the args/stdin loop must still exist and stay separate from the mode list");
+assert.match(index, /cdp \(raw Chrome DevTools Protocol escape hatch\)/,
+    "the tool description must advertise cdp, or the model will never know the mode exists");
+
 // --- the frozen lane-B surface is actually what index.js calls -------------
 const cdpHost = readFileSync(new URL("../dist/extensions/agent-browser/lib/orchestration/cdp-host/index.js", import.meta.url), "utf8");
 assert.match(cdpHost, /export async function handleCdpHostInput\(\{ compiled, dispatch, signal, webSocketImpl = globalThis\.WebSocket \} = \{\}\)/,

@@ -1357,7 +1357,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         type: "object",
         properties: Object.fromEntries([
             "script", "args", "semanticAction", "qa", "job", "electron", "debug", "settle", "networkBody",
-            "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
+            "vault", "checkpoint", "devServer", "login", "cdp", "sourceLookup", "networkSourceLookup", "revealSecrets", "verbosity",
             "stdin", "outputPath", "timeoutMs", "sessionMode",
         ].map((k) => [k, {}])),
         additionalProperties: true,
@@ -1384,7 +1384,12 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         if (typeof out.timeoutMs === "string" && out.timeoutMs.trim() !== "" && Number.isFinite(Number(out.timeoutMs))) {
             out.timeoutMs = Number(out.timeoutMs);
         }
-        for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "sourceLookup", "networkSourceLookup"]) {
+        // local patch (wave14): `cdp` MUST stay in this list. A mode missing from it arrives at the
+        // host as a stringified object; without the parse below, resolveAgentBrowserInput never sees
+        // a cdp object, the mode reads as "not supplied", and the call falls through to args-mode and
+        // dies with "args must contain at least one command token" - an error that points nowhere near
+        // the real cause. The schema property list above needs it for the same reason.
+        for (const key of ["semanticAction", "job", "qa", "electron", "debug", "settle", "networkBody", "vault", "checkpoint", "devServer", "login", "cdp", "sourceLookup", "networkSourceLookup"]) {
             const value = out[key];
             if (typeof value === "string") {
                 try {
@@ -1399,7 +1404,7 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
         name: "agent_browser",
         prepareArguments: normalizeAgentBrowserParams,
         label: "Agent Browser",
-        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, checkpoint (auth-snapshot save/restore/list), devServer, login, sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
+        description: "Browser automation via agent-browser. Input modes (choose ONE per call): script (one-shot JS), args (raw argv), semanticAction, job (multi-step batch), qa, electron (desktop apps), debug, settle, networkBody, vault, checkpoint (auth-snapshot save/restore/list), devServer, login, cdp (raw Chrome DevTools Protocol escape hatch), sourceLookup, networkSourceLookup, revealSecrets, verbosity. Use for ALL browser work (always available). Full guide — READ before first use in a session: /home/yusuf/.pi/agent/extensions/pi-agent-browser-native/docs/COMMAND_REFERENCE.md",
         promptSnippet: "Browser automation: open/click/fill/scrape live pages; use for ALL browser work, guide in docs/COMMAND_REFERENCE.md.",
         promptGuidelines: toolPromptGuidelines,
         // local patch P28: some model providers/harnesses deliver array/object tool params as JSON strings
