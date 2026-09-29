@@ -15,6 +15,7 @@
 // The refusal is the point. If more than one element matches, this does not pick one: the
 // recorded deaths in this project are all "guessed quietly and reported success". It returns
 // the candidates and their rects so the model can narrow the query, which is a real answer.
+import { withOptionalSessionArgs } from "../results/next-actions.js";
 import { isRecord } from "../parsing.js";
 
 export const ACT_ALLOWED_FIELDS = new Set(["session", "find", "action", "maxMatches", "limit"]);
@@ -207,7 +208,10 @@ export function compileAgentBrowserAct(input) {
         limit: plan.limit ?? ACT_DEFAULT_READ_LIMIT,
         maxMatches: plan.maxMatches ?? ACT_DEFAULT_MAX_MATCHES,
     });
-    const compiled = { kind: "act", args: ["eval", "--stdin"], stdin: script };
+    // The session has to reach argv, not just the compiled object. Without this the eval ran in
+    // pi-root, and the wrapper's own tab-drift detector caught the mismatch on the first live
+    // call - which is the correct behaviour, but it means this was never actually routed.
+    const compiled = { kind: "act", args: withOptionalSessionArgs(plan.session, ["eval", "--stdin"]), stdin: script };
     if (plan.session !== undefined) {
         compiled.session = plan.session;
     }

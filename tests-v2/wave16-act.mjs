@@ -43,6 +43,11 @@ group("a valid intent compiles to exactly one eval spawn", () => {
     assert.equal(result.kind, "act");
     assert.equal(result.status, "valid");
     assert.deepEqual(result.toolArgs, ["eval", "--stdin"], "one spawn, and it is the eval lane");
+    // Found by the first LIVE call, not by reading: without the session in argv the eval ran
+    // in pi-root, and the wrapper's tab-drift detector caught the mismatch. The offline test
+    // passed happily because it only checked that some script was produced.
+    const scoped = input({ action: "click", find: { text: "Reply" }, session: "ultron1" });
+    assert.deepEqual(scoped.toolArgs, ["--session", "ultron1", "eval", "--stdin"], "the session must reach argv or the call runs in the wrong session");
     assert.equal(typeof result.toolStdin, "string");
     assert.ok(result.toolStdin.length > 0, "the script must be carried on stdin");
 });

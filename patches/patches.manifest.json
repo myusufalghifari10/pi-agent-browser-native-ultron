@@ -252,7 +252,7 @@
         "dist/extensions/agent-browser/lib/input-modes/act.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/act.js": "027d2cebd13a9d56fbb2ac86d514f7b016bf539e28a787d607c9851f49e02678"
+        "dist/extensions/agent-browser/lib/input-modes/act.js": "9786a0216b992eccd46b644622caa278a7d2f54d980fc65f17ea4eef2328ffcd"
       },
       "upstreamDefect": "agent-browser's `find` takes the FIRST match and offers no visibility filter, so it lands on hidden 0x0 duplicates - `find text \"Run\"` once clicked a hidden duplicate instead of the real 71x32 button. Measured consequence: 169 of 435 eval --stdin calls in the 14 use-case sweep (39%) were the model re-deriving the same candidate walk in JavaScript by hand, precisely because `find` could not be trusted. The upstream CLI cannot be changed from here, but the wrapper can own the JavaScript, so `act` generates it once.",
       "offlineTest": "tests-v2/wave16-act.mjs",
