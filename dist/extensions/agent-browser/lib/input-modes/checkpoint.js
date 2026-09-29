@@ -187,7 +187,9 @@ export function compileCheckpointRun(plan) {
     // between the load and the snapshot because the wrapper's page-target validator refuses
     // page-content inspection directly after a state-load transition (wave4 live-sweep W-V1); the
     // pre-spawn gate additionally injects the `open <origin>` row after decryption (see
-    // buildRestoreBatchRows) so the snapshot health-checks a real page of the restored origin.
+    // buildRestoreBatchRows) so the snapshot health-checks a real page of the restored origin. wave18:
+    // a save without `checkpoint.url` still records that origin (derived from the storage-state it
+    // stores, see deriveCheckpointOriginFromState), so the gate can name it after decryption.
     return {
         args: ["--session", checkpointSessionNameForId(plan.id), "batch", "--bail"],
         plan,
@@ -286,6 +288,36 @@ export async function finalizeCheckpointRun({ compiledCheckpoint, presentation, 
     }
 }
 
+/**
+ * wave18: the origin a snapshot should be restored at, read out of the upstream storage-state the
+ * save path already holds in memory (`origins[].origin`). This is the snapshot's own origin, not a
+ * guess -- the pre-spawn gate in prepare.js only injects the `open <origin>` row when the envelope
+ * carries url/origin metadata, and that metadata came solely from the caller passing `checkpoint.url`.
+ * Zero or several distinct origins return undefined on purpose: the scheme is never invented from a
+ * cookie domain, and one of many origins is never picked arbitrarily. Such a snapshot stays without
+ * url/origin metadata and the restore then fails explicitly instead of pretending to be restored.
+ */
+export function deriveCheckpointOriginFromState(stateBytes) {
+    if (!Buffer.isBuffer(stateBytes) || stateBytes.length === 0) {
+        return undefined;
+    }
+    let parsed;
+    try {
+        parsed = JSON.parse(stateBytes.toString("utf8"));
+    }
+    catch {
+        return undefined;
+    }
+    const origins = new Set();
+    for (const entry of Array.isArray(parsed?.origins) ? parsed.origins : []) {
+        const origin = typeof entry?.origin === "string" ? normalizeVaultOrigin(entry.origin) : undefined;
+        if (origin) {
+            origins.add(origin);
+        }
+    }
+    return origins.size === 1 ? [...origins][0] : undefined;
+}
+
 async function finalizeCheckpointSave({ compiledCheckpoint, presentation, presentationEnvelope, processSucceeded, succeeded }) {
     const { plan, tempPath } = compiledCheckpoint;
     if (!processSucceeded || !succeeded) {
@@ -306,7 +338,8 @@ async function finalizeCheckpointSave({ compiledCheckpoint, presentation, presen
             succeeded: false,
         };
     }
-    const stored = saveCheckpoint({ env: process.env, label: plan.label, origin: plan.origin, stateBytes });
+    const origin = plan.origin ?? deriveCheckpointOriginFromState(stateBytes);
+    const stored = saveCheckpoint({ env: process.env, label: plan.label, origin, stateBytes });
     secureDeleteFile(tempPath);
     if (stored.status !== "ok") {
         const text = `Checkpoint save failed: ${stored.error}`;
@@ -324,13 +357,14 @@ async function finalizeCheckpointSave({ compiledCheckpoint, presentation, presen
     if (plan.label) {
         described.label = plan.label;
     }
-    if (plan.origin) {
-        described.origin = plan.origin;
+    if (origin) {
+        described.origin = origin;
+        described.originDerived = plan.origin === undefined;
     }
     const text = [
         `Checkpoint saved: ${stored.id}`,
         plan.label ? `Label: ${plan.label}` : undefined,
-        plan.origin ? `Origin: ${plan.origin}` : undefined,
+        origin ? `Origin: ${origin}${plan.origin ? "" : " (read from the saved storage-state)"}` : "No origin was recorded: the saved storage-state names no single http(s) origin, so a later restore cannot open it. Re-save with checkpoint.url if this login belongs to one origin.",
         `Created ${new Date(stored.createdAtMs).toISOString()} — storage-state ${stored.stateBytes} bytes, ciphertext ${stored.ciphertextBytes} bytes.`,
         `Fidelity: ${CHECKPOINT_FIDELITY}.`,
     ].filter((line) => line !== undefined).join("\n");
@@ -361,6 +395,14 @@ function finalizeCheckpointRestore({ compiledCheckpoint, presentation, presentat
         };
     }
     const snapshotPayload = isRecord(snapshotRow?.result) ? snapshotRow.result : isRecord(snapshotRow?.data) ? snapshotRow.data : undefined;
+    // wave18: the pre-spawn gate (prepare.js) splices `open <target>` into the restore batch only
+    // when the envelope carries url/origin metadata, which finalizeCheckpointSave now derives from
+    // the storage-state. With no url/origin metadata the origin was never opened, so the health
+    // check inspected no page of the restored origin and proves nothing about the login -- say so
+    // explicitly instead of grading a snapshot of nothing as a restore.
+    const restoreTarget = typeof metadata.url === "string" && metadata.url.length > 0
+        ? metadata.url
+        : typeof metadata.origin === "string" && metadata.origin.length > 0 ? metadata.origin : undefined;
     const pageRendered = snapshotRow !== undefined && snapshotRow.success !== false && snapshotPayload !== undefined;
     const checkpoint = {
         action: "restore",
@@ -373,6 +415,18 @@ function finalizeCheckpointRestore({ compiledCheckpoint, presentation, presentat
     };
     if (plan.force === true) {
         checkpoint.forced = true;
+    }
+    if (!restoreTarget) {
+        checkpoint.reauthRequired = true;
+        checkpoint.loginEvidence = undefined;
+        checkpoint.originMetadataMissing = true;
+        const text = `Checkpoint ${plan.id} loaded into ${sessionName}, but this snapshot carries no url/origin metadata, so the restore never opened an origin and the post-restore snapshot proves nothing about the login. Treat the login as NOT verified — re-save the checkpoint from the logged-in session with checkpoint.url set (e.g. url: "https://app.example.com"), then restore again.`;
+        return {
+            checkpoint,
+            presentation: { ...withPrependedText(presentation, text), resultCategory: "failure", failureCategory: "checkpoint-reauth-required" },
+            presentationEnvelope: { ...presentationEnvelope, success: false, error: text },
+            succeeded: false,
+        };
     }
     if (!pageRendered) {
         const text = `Checkpoint ${plan.id} loaded into ${sessionName}, but the post-restore snapshot failed, so there is no evidence the session works. Treat the login as NOT verified — reauth required.`;
@@ -390,7 +444,7 @@ function finalizeCheckpointRestore({ compiledCheckpoint, presentation, presentat
     const text = [
         `Checkpoint ${plan.id} restored into checkpoint session ${sessionName}${reused ? " (session profile reused)" : ""}.`,
         "Login evidence: page rendered (the post-restore snapshot succeeded in that session).",
-        `This proves the storage-state loaded and a page renders — it does NOT prove the origin login is still valid${plan.origin ? ` (${plan.origin})` : ""}; open the origin and verify before consequential work.`,
+        `This proves the storage-state loaded and a page renders — it does NOT prove the origin login is still valid (${restoreTarget}); open the origin and verify before consequential work.`,
     ].join("\n");
     return { checkpoint, presentation: withPrependedText(presentation, text, `Checkpoint ${plan.id} restored into ${sessionName}; login evidence: page rendered`), presentationEnvelope, succeeded: true };
 }
