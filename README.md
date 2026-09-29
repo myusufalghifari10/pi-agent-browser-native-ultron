@@ -1,3 +1,45 @@
+> ## ⚠️ Fork notice — this is a MODIFIED distribution
+>
+> This repository is **not** the pristine upstream release. It is a modified fork maintained by
+> **Yusuf (myusufalghifari10)** and contains substantial local changes that are not upstream.
+>
+> **Upstream project:** [`fitchmultz/pi-agent-browser-native`](https://github.com/fitchmultz/pi-agent-browser-native)
+> **Original author and copyright holder:** Mitch Fultz — see [`LICENSE`](LICENSE) (MIT)
+> **Upstream version this fork is based on:** 0.6.13
+>
+> Everything below the notice is upstream documentation, lightly edited. The MIT license and the
+> original copyright notice are retained unmodified; the local changes below are additional work
+> distributed under the same terms.
+>
+> ### What this fork adds
+>
+> - **A Patch Integrity Ledger** (`patches/patches.manifest.json`) that pins the sha256 of every
+>   locally divergent file and is verified before each browser spawn. Drift is a hard refusal, never a
+>   silent fallback.
+> - **Upstream defect workarounds** P1–P10: `state clear` deleting *every* saved state file,
+>   `diff snapshot` always reporting `changed: true`, `errors --clear` reporting success while rows
+>   survive, `cookies get` silently ignoring `--url`, and others — each verified against 0.37.0.
+> - **New input modes:** `vault` (encrypted local credential store), `login` (one-call sign-in
+>   without the agent ever holding a password), `checkpoint` (origin auth-snapshots), `devServer`,
+>   `debug`, `settle`, `networkBody`, `sourceLookup`, `networkSourceLookup`, `revealSecrets`.
+> - **Failure-honesty work:** a login preset that refuses to report success on an unverified
+>   credential write, a click-dispatch DOM-event probe, and teaching guards that reject dead-end
+>   call shapes with the real grammar instead of an opaque upstream error.
+> - **A 12-wave development log** in `PATCHES.md`, `tests-v2/`, and `docs/COMMAND_REFERENCE.md`.
+>
+> ### Fork-specific caveats
+>
+> - `dist/` is the **live, hand-patched source**. There is no `src/` and no build step. Do **not**
+>   run `npm install` or `npm run build` — that destroys the local patches. The ledger will then
+>   report drift and the wrapper refuses to spawn.
+> - The patch set is documented in `PATCHES.md`; re-pin hashes only from a verified tree.
+> - A full Pi restart is required for `dist/` changes to take effect.
+> - `docs/COMMAND_REFERENCE.md` carries fork-specific playbooks layered on the upstream reference.
+>
+> **Upstream issues and contributions belong at the original repository.**
+
+---
+
 # pi-agent-browser-native
 
 A Pi extension that lets coding agents drive real browser sessions with a native `agent_browser` tool instead of brittle shell commands.
