@@ -1,5 +1,5 @@
 import { stat } from "node:fs/promises";
-import { isCloseCommand } from "../../command-taxonomy.js";
+import { isCloseCommand, isOpenNavigationCommand, isPageMutationCommand, isUnverifiedPageTransitionCommand } from "../../command-taxonomy.js";
 import { isRecord } from "../../parsing.js";
 import { getAgentBrowserSessionIdentityKey } from "../../argv-grammar.js";
 import { extractUpstreamCommandTokens, parseCommandInfo, redactInvocationArgs, redactSensitiveText, redactSensitiveValue } from "../../runtime.js";
@@ -49,16 +49,40 @@ function formatBatchStepError(error) {
     const formattedErrorText = errorText.length > 0 ? `Error: ${errorText}` : "Error: batch step failed.";
     return appendSelectorRecoveryHint(formattedErrorText);
 }
-function getBatchFailureDetails(steps) {
+export function getBatchFailureDetails(steps) {
     const failedSteps = steps.filter((step) => step.details.success === false);
     if (failedSteps.length === 0)
         return undefined;
     const successCount = steps.length - failedSteps.length;
+    const failedIndex = steps.indexOf(failedSteps[0]);
+    // wave22: batch steps run back to back. When a click navigates and the very next step targets
+    // an element that only exists on the new page, that step reports "Element not found" even
+    // though the steps are perfectly correct and the click DID work — the page simply had not
+    // re-rendered yet. Proven live on the AWS Skill Builder exam: click next-question-button,
+    // then click the option selector, and the option step failed every time until a wait was
+    // inserted. The remedy is the missing information, so state it here instead of leaving the
+    // caller to conclude the selector is wrong.
+    //
+    // "Changes the page" is read from the existing command taxonomy, not a hand-kept list:
+    // `open` is a clearer page change than a click, and the first attempt at this only matched
+    // "click", which a test caught. readOnly commands are excluded on purpose — a `get url`
+    // followed by a failed selector really is a wrong selector.
+    const changedPageEarlier = steps.slice(0, failedIndex).some((step) => {
+        const commandText = step.details?.commandText;
+        if (typeof commandText !== "string" || commandText.trim() === "") return false;
+        const tokens = commandText.trim().split(/\s+/);
+        const command = tokens[0];
+        return command === "click"
+            || isOpenNavigationCommand(command)
+            || isPageMutationCommand(command, tokens[1])
+            || isUnverifiedPageTransitionCommand(command, tokens[1]);
+    });
     return {
         failedStep: failedSteps[0].details,
         failureCount: failedSteps.length,
         successCount,
         totalCount: steps.length,
+        ...(changedPageEarlier ? { missingSettleHint: true } : {}),
     };
 }
 function hasModelFacingArgRedaction(args) {
@@ -443,7 +467,10 @@ export async function buildBatchPresentation(options) {
             batchSummary,
             `First failing step: ${batchFailure.failedStep.index + 1} — ${batchFailure.failedStep.commandText}`,
             batchFailure.failureCount > 1 ? `${batchFailure.failureCount} steps failed. See the per-step results below.` : "See the per-step results below.",
-        ].join("\n");
+            batchFailure.missingSettleHint === true
+                ? "That step follows a click, and batch steps run back-to-back with no settle between them. If the earlier click navigated or re-rendered, this step ran before the new page existed — that is a TIMING failure, not a wrong selector. Insert a wait after any click that changes the page: [[\"click\",\"...\"],[\"wait\",\"900\"],[\"click\",\"...\"]]."
+                : undefined,
+        ].filter((line) => line !== undefined).join("\n");
     const text = [failureHeader, mutationEvidenceText, stepText].filter((line) => line !== undefined).join("\n\n");
     const artifactRetentionSummary = currentArtifactManifest ? formatSessionArtifactRetentionSummary(currentArtifactManifest) : undefined;
     const contentText = artifactRetentionSummary && manifestHasNewNoticeWorthyEntries(options.artifactManifest, currentArtifactManifest)

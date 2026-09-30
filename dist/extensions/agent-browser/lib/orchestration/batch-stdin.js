@@ -106,6 +106,25 @@ export function parseBatchStdinJsonArray(stdin) {
         if (!Array.isArray(parsed)) {
             return { error: `agent_browser batch stdin must be a JSON array of command steps.${BATCH_STDIN_EXAMPLE}` };
         }
+        // wave22: this host re-serializes a nested array param by comma-joining it, so a
+        // perfectly correct [["click","a"],["click","b"]] can arrive as ["click,a,click,b"] —
+        // an array of STRINGS. The old error then blamed "step 0 must be a non-empty array",
+        // which points at the shape and never at the cause, so a caller could not tell that the
+        // fix is to pass stdin as a JSON string. Proven live: an agent burned many calls here
+        // before discovering the JSON-string form on its own.
+        //
+        // The comma is the discriminator, and it is load-bearing. A single-element array whose
+        // only element is a bare word is a hand-built mistake, not coercion — the existing
+        // wave11 contract asserts exactly that, and claiming the host did it would be a lie that
+        // sends the caller off debugging their host instead of their own call.
+        if (parsed.length > 0 && parsed.every((row) => typeof row === "string")) {
+            const joined = parsed.filter((row) => row.includes(","));
+            if (joined.length === parsed.length) {
+                return {
+                    error: `agent_browser batch stdin arrived COMMA-JOINED by the host: ${parsed.length === 1 ? "your steps were flattened into a single string" : `your ${parsed.length} steps were flattened into strings`} (${JSON.stringify(parsed).slice(0, 120)}). This host re-serializes a nested array parameter, so steps must be passed as a JSON STRING: {"stdin": "[[\\"click\\",\\"@e3\\"]]"}. Sending it any other way fails here even when the steps are correct.${BATCH_STDIN_EXAMPLE}`,
+                };
+            }
+        }
         return { steps: parsed };
     }
     catch (error) {
