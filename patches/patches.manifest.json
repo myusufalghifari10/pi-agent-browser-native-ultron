@@ -148,7 +148,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "23ddf644eaf35c685fd0ca611d6c4f87604f2644d913380a70ef408115871faf"
+        "dist/extensions/agent-browser/index.js": "76978203c88928337ac8725cbf2dcd1fc1d3a77c97b16de7a057312cc20bfb20"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md).",
       "verifiedLive": "LIVE: wave21 filled the parameter schema. Another agent session read this guide in full and still could not make a single successful call — args died with \"args is not iterable\", job with \"job.steps must be a non-empty array\" while P28 was fine. Cause: every parameter was declared {} so the model was told the parameter exists and nothing else; it guessed args as an array-of-arrays because that is what stdin looks like for batch, then read the guide, concluded the patch was clobbered, and reported a bug that did not exist. Now each parameter carries a type and a description, and every mode-object admits string|object because this host stringifies object params."
@@ -162,7 +162,7 @@
         "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "0af16bb389983177dba082bc575ff51ba3b14cd8ea1fb518014e6fe71e31def1"
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "005ea9cbc65185f9962e00f27c6afb7d4f4aebdf08ff698aa2a6a4aa1641418b"
       },
       "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type.",
       "verifiedLive": "LIVE-VERIFIED 2026-09-30, second pass. The host wraps EVERY array element recursively: [[\"get\",\"url\"],[\"get\",\"title\"]] arrives as [{item:[{item:\"get\"},{item:\"url\"}]},{item:[{item:\"get\"},{item:\"title\"}]}]. Unwrapping only the outer level then failed with \"token 0 must be a string (got object)\", which is what exposed the inner level. The envelope is now stripped at every depth and the count is reported as itemEnvelopesStripped. Safety is structural, not a guess: batch validation requires every token to be a string, so no object can appear in a batch that would have validated, making the strip provably a no-op on every input that already worked. Three wrong theories preceded this: comma-joining, flattening, and outer-envelope-only."
@@ -285,11 +285,11 @@
         "tests-v2/wave21-tool-schema.mjs"
       ],
       "sha256": {
-        "tests-v2/wave21-tool-schema.mjs": "4e98dc5b2b6b4a2ad37714c448c5d69b0ad41cbc7b3258c97fd00a80ac007c68"
+        "tests-v2/wave21-tool-schema.mjs": "f6bd3636738825c9c66ad172094c840d31a9c7bdb0d70cd391730c9719b077b0"
       },
       "upstreamDefect": "Not an upstream defect - a local usability defect. The slim schema declared every parameter as an empty object, so the model was told a parameter exists with no type, shape or description. Since the model reads the schema before it reads the docs, the docs cannot fix a wrong guess made from the schema: an agent that read all 2,242 lines still failed every call. Fixed by declaring a type and a one-line description per parameter, and by allowing string on every mode-object since this host re-coerces object params to strings. tests-v2/wave21-tool-schema.mjs asserts this against the real tool definition a host receives, not against source text; a source match would pass while the host kept getting {}.",
       "offlineTest": "tests-v2/wave21-tool-schema.mjs",
-      "verifiedLive": "needs a full Pi restart — the schema is read when the tool is registered at startup"
+      "verifiedLive": "LIVE-VERIFIED + REVERSED 2026-09-30. Wave 21 declared args/stdin as [\"string\",\"array\"]. Searching found why that was wrong: this Pi build serialises every tool parameter to a string (earendil-works/pi#4226, closed as big-refactor), so declaring an array asks the runner to rebuild one out of a string, and it does so four ways, all seen live: {item:...} wrappers, a trailing ] appended to the text, a rejected \"invalid type: map\", and a step object where an array should be. Declaring an array with no items is also invalid JSON Schema 6.4.1. The same {item:[...]} wrapping is a documented runner bug in hermes-agent#104803. So args/stdin are now a plain string and the ARRAY TOLERANCE moved into the parser, where a host that really passes an array is still served. Test asserts the array type is ABSENT, because its presence was the bug."
     },
     {
       "id": "P-W22-batch-diagnostics",
@@ -300,7 +300,7 @@
         "tests-v2/wave22-batch-diagnostics.mjs"
       ],
       "sha256": {
-        "tests-v2/wave22-batch-diagnostics.mjs": "d1a9a5afc1c05804784a0afe059b45dde5e613b3ecc9cfb8b534908db41bbcfa"
+        "tests-v2/wave22-batch-diagnostics.mjs": "001d263b684f74d10f3122f3336ca2b670592d4a04ad44e938e968e6f8c28a8e"
       },
       "upstreamDefect": "Wrapper-local diagnostics, not an upstream defect. Proven live on a real 65-question exam: (1) the host comma-joins a nested array stdin param, so a correct [[..],[..]] arrives as an array of strings, and the old error blamed 'step 0 must be a non-empty array' - the shape, never the cause, so the caller could not find the JSON-string fix on its own. (2) batch steps run back-to-back, so a click that navigates followed by a step targeting an element that only exists on the new page reports 'Element not found' and the caller naturally concludes the selector is wrong; the failing step is correct and the missing wait is the bug. The comma is the discriminator for (1) so a hand-built mistake is never blamed on the host, and the page-change check reads the existing command taxonomy rather than a hand-kept list, because a first attempt matching only 'click' missed 'open'.",
       "offlineTest": "tests-v2/wave22-batch-diagnostics.mjs",

@@ -83,6 +83,25 @@ export function parseBatchCommandArgument(command) {
  * Stripping {item: ...} is therefore a no-op on every input that already worked, and can only turn
  * a rejected input into the call the caller wrote. Validation remains the safety net either way.
  */
+/** Drop 1..8 trailing `]`/`}` and return the first remainder that parses into an array. */
+function trimTrailingClosers(text) {
+    for (let removed = 1; removed <= 8; removed += 1) {
+        const candidate = text.slice(0, text.length - removed);
+        if (!/[}\]]$/.test(candidate)) {
+            return undefined;
+        }
+        try {
+            const value = JSON.parse(candidate);
+            if (Array.isArray(value)) {
+                return { value, removed };
+            }
+        }
+        catch {
+            // keep shortening
+        }
+    }
+    return undefined;
+}
 function isItemEnvelope(value) {
     return value !== null
         && typeof value === "object"
@@ -140,12 +159,35 @@ export function parseBatchStdinJsonArray(stdin) {
     }
     let parsed;
     let parsedItemEnvelopes = 0;
+    let trimmedTrailingClosers = 0;
     try {
         // wave4 (live-sweep W-A1): P28 prepareArguments de-stringifies a JSON-string stdin into a
         // real array before this point, so a plain JSON.parse here coerced that array back to a
         // comma-joined string ("click,x,get,url") and failed with a baffling parse error. Accept
         // both the documented JSON-string form and the already-parsed array form.
-        parsed = typeof stdin === "string" ? JSON.parse(stdin) : stdin;
+        if (typeof stdin === "string") {
+            try {
+                parsed = JSON.parse(stdin);
+            }
+            catch {
+                // wave22 LIVE: a JSON-string stdin arrives with trailing closer characters APPENDED by the
+                // host, so JSON.parse throws rather than returning a value. Measured, not guessed: one step,
+                // [["get","url"]] (14 chars), arrived 16 chars as [[\"get\",\"url\"]]] — two extra. Two steps,
+                // 31 chars, arrived 32 as [[\"get\",\"url\"],[\"get\",\"title\"]]] — one extra. The count is not
+                // derivable, so the repair is empirical: try successively shorter tails and keep the first that
+                // parses into an array. Bounded to 8, because a caller who genuinely wrote junk deserves the
+                // real error rather than a guess about what they meant.
+                const trimmed = trimTrailingClosers(stdin);
+                if (trimmed === undefined) {
+                    throw new SyntaxError("unrecoverable");
+                }
+                parsed = trimmed.value;
+                trimmedTrailingClosers = trimmed.removed;
+            }
+        }
+        else {
+            parsed = stdin;
+        }
         if (!Array.isArray(parsed)) {
             return { error: `agent_browser batch stdin must be a JSON array of command steps.${BATCH_STDIN_EXAMPLE}` };
         }
@@ -184,7 +226,9 @@ export function parseBatchStdinJsonArray(stdin) {
         return { steps: parsed, itemEnvelopesStripped: parsedItemEnvelopes };
     }
     catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error && error.message === "unrecoverable"
+            ? "no amount of trailing-closer trimming makes it a valid array of steps"
+            : error instanceof Error ? error.message : String(error);
         // Show the text that actually arrived. Four theories about the host's coercion have been
         // wrong already (comma-joining, flattening, outer-only envelope, recursive envelope) and
         // every one of them was a guess read off a symptom. Quoting the received value is the only

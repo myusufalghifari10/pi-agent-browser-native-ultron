@@ -99,6 +99,13 @@ assert.ok(!/was flattened on the way in/.test(String(lone.error)), "a lone bare 
 assert.match(String(lone.error), /non-empty array/, "the hedged case keeps the old wording, which wave11 pins");
 assert.match(String(lone.error), /JSON STRING/, "even the hedged case must state the working form");
 
+// The received value must be quoted. This is the ONLY technique that settled any of the four
+// theories, and it is what finally revealed the trailing "]" — guessing from a symptom produced
+// three wrong fixes. A parse error that does not show what arrived forces a guess.
+const quoted = parseUserBatchStdin('[["get","url"]]]]banana');
+assert.match(String(quoted.error), /It arrived as string of length \d+/, "a parse failure must report the type and length of what arrived");
+assert.match(String(quoted.error), /banana/, "a parse failure must quote the received text, not just its length");
+
 // A genuinely non-JSON string is still a JSON parse error, not a coercion claim.
 assert.match(parseBatchStdinJsonArray("click,@e3").error, /could not be parsed as JSON/,
     "a bare comma-joined string is still reported as a parse failure");
@@ -160,4 +167,4 @@ assert.equal(first.missingSettleHint, undefined, "a first-step failure has no pr
 // A fully successful batch has no failure details at all.
 assert.equal(getBatchFailureDetails([step(true, 'click a'), step(true, 'click b')]), undefined, "a clean batch reports no failure");
 
-console.log("wave22-batch-diagnostics: all assertions passed (item envelopes stripped recursively, working forms provably untouched, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");
+console.log("wave22-batch-diagnostics: all assertions passed (item envelopes stripped recursively, working forms provably untouched, a lone bare word keeps the wave11 wording, parse errors quote what arrived, missing-settle flagged only after a page-changing step)");

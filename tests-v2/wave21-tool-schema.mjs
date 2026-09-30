@@ -38,16 +38,38 @@ for (const key of MODES) {
 
 // 2. `args` is the parameter that broke. It must name the failing symptom verbatim, because the
 //    whole point is that an agent who has never read the guide can still avoid the mistake.
+import { parseUserBatchStdin } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
+
 const argsDoc = PROPS.args.description;
 assert.match(argsDoc, /args is not iterable/, "args must name the exact error the host throws, so it is recognisable");
-assert.match(argsDoc, /JSON string/, "args must say the working form is a JSON string");
-assert.ok(Array.isArray(PROPS.args.type) && PROPS.args.type.includes("array"),
-    "args must still admit a raw array, so hosts that accept one are not broken by this change");
+assert.match(argsDoc, /JSON string/i, "args must say the working form is a JSON string");
+// wave22 REVERSED the decision above, on evidence rather than on taste.
+//
+// This Pi build serialises every tool parameter to a string (earendil-works/pi#4226). Declaring
+// "array" as well therefore asks the runner to rebuild an array out of a string, and it does so
+// four different ways, all observed live: nested {item: ...} wrappers, a trailing "]" appended to
+// the text, a rejected "invalid type: map", and a step object where an array should be. Declaring
+// an array with no `items` is also invalid JSON Schema (§6.4.1), so the reconstruction had nothing
+// to reconstruct from. The same wrapping is a documented runner bug elsewhere (hermes-agent#104803).
+//
+// So the schema declares a plain string and the ARRAY TOLERANCE lives in the parser instead, where
+// a host that really does pass an array is still served correctly. The test therefore asserts the
+// absence of the array type, because its presence is the bug.
+for (const param of ["args", "stdin"]) {
+    assert.equal(PROPS[param].type, "string", `${param} must be declared a plain string; an array type only provokes the runner's reconstruction`);
+    assert.equal(PROPS[param].items, undefined, `${param} must not declare items; an array type without them is invalid JSON Schema`);
+    assert.match(PROPS[param].description, /JSON string/i, `${param} must name the JSON string as the form to send`);
+}
+// No parameter anywhere may reintroduce an array type — that is the whole defect class.
+for (const [name, spec] of Object.entries(PROPS)) {
+    const declared = Array.isArray(spec.type) ? spec.type : [spec.type];
+    assert.ok(!declared.includes("array"), `${name} must not declare an array type; the host stringifies params and will mangle it`);
+}
 
-// 3. `stdin` is the shape `args` was mistaken for. It must stay array-of-arrays for batch.
-assert.ok(PROPS.stdin.type.includes("array"), "stdin must admit the array form batch needs");
+// The tolerance is not lost, it is relocated: a real array still parses and runs.
+assert.deepEqual(parseUserBatchStdin('[["get","url"]]').steps, [["get","url"]], "the documented JSON-string form must parse");
+assert.deepEqual(parseUserBatchStdin([["get", "url"]]).steps, [["get", "url"]], "a host that does pass a real array must still be served");
 assert.match(PROPS.stdin.description, /batch/i, "stdin must be described for batch steps");
-
 // 4. This host re-coerces object params to strings as well — that is the `job` failure. Every
 //    mode-object must therefore admit BOTH string and object, or a correct call gets rejected.
 for (const key of ["job", "qa", "act", "cdp", "vault", "checkpoint", "login", "semanticAction",
