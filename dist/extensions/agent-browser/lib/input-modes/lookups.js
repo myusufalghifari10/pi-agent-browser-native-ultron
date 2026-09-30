@@ -26,6 +26,15 @@ export function compileAgentBrowserSourceLookup(input) {
     if (input.includeDomHints !== undefined && typeof input.includeDomHints !== "boolean") {
         return { error: "sourceLookup.includeDomHints must be a boolean when provided." };
     }
+    // wave22: `session` was accepted by the schema and then silently dropped. The compiled argv was a
+    // bare ["batch"], so a caller asking for a lookup in a named session got the root session instead and
+    // the symptom was a baffling "Element not found" for an element that was demonstrably present in the
+    // session they named — found live, not by reading this. networkSourceLookup already threaded session
+    // correctly, so this mirrors it: validate it, then pass it through.
+    const session = input.session;
+    if (session !== undefined && (typeof session !== "string" || session.trim().length === 0)) {
+        return { error: "sourceLookup.session must be a non-empty string when provided." };
+    }
     const rawMaxWorkspaceFiles = input.maxWorkspaceFiles;
     if (rawMaxWorkspaceFiles !== undefined && (typeof rawMaxWorkspaceFiles !== "number" || !Number.isInteger(rawMaxWorkspaceFiles) || rawMaxWorkspaceFiles <= 0)) {
         return { error: "sourceLookup.maxWorkspaceFiles must be a positive integer when provided." };
@@ -50,8 +59,8 @@ export function compileAgentBrowserSourceLookup(input) {
     }
     return {
         compiled: {
-            args: ["batch"],
-            query: { componentName, includeDomHints, maxWorkspaceFiles, reactFiberId, selector },
+            args: [...(typeof session === "string" ? ["--session", session] : []), "batch"],
+            query: { componentName, includeDomHints, maxWorkspaceFiles, reactFiberId, selector, session },
             stdin: JSON.stringify(steps.map((step) => step.args)),
             steps,
         },

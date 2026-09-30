@@ -337,6 +337,23 @@
       "upstreamDefect": "Upstream host bug, repaired locally. This Pi build stringifies every tool parameter (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: ...} (hermes-agent#104803), so a job whose `steps` is an array of objects arrives wrapped and each step reads as a bare string, producing the misleading 'job.steps must be a non-empty array' for a payload that is correct. Same host class as the caller-batch breakage, reaching the tool through the job object instead. A job step is always an object carrying an `action`, so {item: ...} can never be a legitimate step and the strip is a no-op on any job that already worked.",
       "offlineTest": "tests-v2/wave22-job-envelope.mjs",
       "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30. The exact job that failed with 'job.steps must be a non-empty array' now runs both steps to completion against a real page: step 1 snapshot -i returned 1628 refs, step 2 wait --url skillbuilder.aws resolved. This also proves job's internal batch runs, which is the half of the earlier reasoning that was wrong: the host mangles only what crosses the stdin tool-parameter boundary, and job builds that stdin in wrapper JS (input-plan.js:413 takes compiledJob.stdin, never params.stdin, and a guard refuses a caller-supplied stdin alongside job). The guide's earlier claim that job failed for the same reason as batch is falsified and has been corrected. Offline: 29/29, 25 ledgered files matching."
+    },
+    {
+      "id": "P-W22-source-lookup-session",
+      "patches": [
+        "W22-source-lookup-session"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/lookups.js",
+        "tests-v2/wave22-source-lookup-session.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/lookups.js": "95fa660d9a702356c93be815fa444aed6ddaf3452124d4a47fafcfdcfaabf81b",
+        "tests-v2/wave22-source-lookup-session.mjs": "2656bc418b5f05d98cc61a38b2ddd13bb74ba989d040fe72eda8eaaf42fc55d1"
+      },
+      "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserSourceLookup accepted a `session` field, never read it, and never validated it: the compiled argv was a bare [\"batch\"] with no --session, so a lookup naming a session silently ran against the root session instead. networkSourceLookup in the same file already threaded session correctly, so the two had drifted apart.",
+      "offlineTest": "tests-v2/wave22-source-lookup-session.mjs",
+      "verifiedLive": "BUG FOUND LIVE, fix pending restart. A sourceLookup naming session ultron1 reported 'Element not found' for an element confirmed present in that session via eval, and the next-action it offered named the ROOT session — the named session was never used. The fix threads and validates session like the sibling mode; the sessionless argv [\"batch\"] is asserted unchanged so existing callers do not shift."
     }
   ]
 }
