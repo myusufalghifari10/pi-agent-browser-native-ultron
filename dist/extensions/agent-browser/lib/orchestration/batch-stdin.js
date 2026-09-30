@@ -185,7 +185,13 @@ export function parseBatchStdinJsonArray(stdin) {
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        return { error: `agent_browser batch stdin could not be parsed as JSON: ${message}.${BATCH_STDIN_EXAMPLE}` };
+        // Show the text that actually arrived. Four theories about the host's coercion have been
+        // wrong already (comma-joining, flattening, outer-only envelope, recursive envelope) and
+        // every one of them was a guess read off a symptom. Quoting the received value is the only
+        // thing that settles it, and it has settled two of them already. Truncated, because a
+        // runaway payload must not land in an error message whole.
+        const received = typeof stdin === "string" ? stdin : Array.isArray(stdin) ? `array(${stdin.length}) ${JSON.stringify(stdin).slice(0, 90)}` : typeof stdin;
+        return { error: `agent_browser batch stdin could not be parsed as JSON: ${message}. It arrived as ${typeof stdin} of length ${typeof stdin === "string" ? stdin.length : "n/a"}: ${String(received).slice(0, 140)}${BATCH_STDIN_EXAMPLE}` };
     }
 }
 export function parseUserBatchStdin(stdin) {

@@ -162,7 +162,7 @@
         "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "7350c19c9b49463b5b5101d977ef482b8860f7e18ee28ab63ebd07c61d872ac4"
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "0af16bb389983177dba082bc575ff51ba3b14cd8ea1fb518014e6fe71e31def1"
       },
       "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type.",
       "verifiedLive": "LIVE-VERIFIED 2026-09-30, second pass. The host wraps EVERY array element recursively: [[\"get\",\"url\"],[\"get\",\"title\"]] arrives as [{item:[{item:\"get\"},{item:\"url\"}]},{item:[{item:\"get\"},{item:\"title\"}]}]. Unwrapping only the outer level then failed with \"token 0 must be a string (got object)\", which is what exposed the inner level. The envelope is now stripped at every depth and the count is reported as itemEnvelopesStripped. Safety is structural, not a guess: batch validation requires every token to be a string, so no object can appear in a batch that would have validated, making the strip provably a no-op on every input that already worked. Three wrong theories preceded this: comma-joining, flattening, and outer-envelope-only."
