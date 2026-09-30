@@ -54,7 +54,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "52a0c69f09f9e32c9ebfdef703b1579f7e054f9b7b7c5dc92e411aefe52d421e"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "818c7fac954caac4a346b992b142ee1a84bca1546c36219fabdd781a38fca5b3"
       },
       "upstreamDefect": "set geo <lat> <lon> succeeded but never granted the geolocation permission, so pages always got User denied Geolocation (wrapper stub-install half)."
     },
@@ -331,7 +331,7 @@
         "tests-v2/wave22-job-envelope.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/job.js": "9edbf4bc617204bc0f23e81599cdf88dc3d0328097b29f4d2cec812a71fca14a",
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "700505e9795920bbff63f26b1fcd268182cd04d8fddad7a90c50681ad463fcb4",
         "tests-v2/wave22-job-envelope.mjs": "3a6e44de36d66f8233132b6ad3312d187d53293dc013cefccdc1a8d1f388dba9"
       },
       "upstreamDefect": "Upstream host bug, repaired locally. This Pi build stringifies every tool parameter (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: ...} (hermes-agent#104803), so a job whose `steps` is an array of objects arrives wrapped and each step reads as a bare string, producing the misleading 'job.steps must be a non-empty array' for a payload that is correct. Same host class as the caller-batch breakage, reaching the tool through the job object instead. A job step is always an object carrying an `action`, so {item: ...} can never be a legitimate step and the strip is a no-op on any job that already worked.",
@@ -399,7 +399,7 @@
         "tests-v2/wave22-debug-verdict.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "52a0c69f09f9e32c9ebfdef703b1579f7e054f9b7b7c5dc92e411aefe52d421e",
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "818c7fac954caac4a346b992b142ee1a84bca1546c36219fabdd781a38fca5b3",
         "tests-v2/wave22-debug-verdict.mjs": "df77d491e425ac99fa219bebaf9c7fb55d8710550ce0bb53fbfe5f78bb44c6da"
       },
       "upstreamDefect": "Wrapper-local defect against a correct analyzer. analyzeDebugPresetResults expects the CHECKS half of a compiled debug, but process-output.js passed the whole compiled object. The analyzer reads input.expectedText / expectedSelector / evalExpression directly and those live one level down under `.checks`, so getExpectedEvalRoles returned an empty list and no eval row was ever assigned a role. One call site, one property access.",
@@ -423,7 +423,7 @@
       ],
       "sha256": {
         "dist/extensions/agent-browser/lib/input-modes/shared.js": "1879bb218ad0d083f8a2f8200e6ac6147e5c3b35598f4005771203bbf8325619",
-        "dist/extensions/agent-browser/lib/input-modes/job.js": "9edbf4bc617204bc0f23e81599cdf88dc3d0328097b29f4d2cec812a71fca14a",
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "700505e9795920bbff63f26b1fcd268182cd04d8fddad7a90c50681ad463fcb4",
         "dist/extensions/agent-browser/lib/input-modes/debug.js": "73f5e5cfb808f446f1fb0b7b638b56794e0fc47dae46415173cbca576dfd50bb",
         "dist/extensions/agent-browser/lib/input-modes/cdp.js": "e6678445e5a312618befdc9dce2d94f9e94fe08a963bf8913c7032d756ff0a9a",
         "tests-v2/wave23-host-array-envelope.mjs": "c8f4b8a09e263c095251b40fccb8fb1bc60eea8140e1ef7b0e4673870b3d773a",
@@ -452,6 +452,36 @@
       "upstreamDefect": "Wrapper-local. Two silent-lying paths found by a reviewer fan-out: (1) networkBody maxChars above the ceiling was clamped and clampedFrom computed, carried and never read, so the truncation was invisible; (2) analyzeNetworkSourceLookupResults reported \"found no failed requests\" when the batch returned no rows at all, i.e. nothing inspected read as a clean network. The boundary for (2) is that a network requests result that actually ran always carries a requests array, so a populated one is a real answer even when empty.",
       "offlineTest": "tests-v2/wave23-reviewer-findings.mjs",
       "verifiedLive": "source-verified by grep and by running each path; offline-verified and sabotage-verified four ways; pending restart"
+    },
+    {
+      "id": "P-W23-reviewer-state-qa",
+      "patches": [
+        "W23-qa-silent-pass",
+        "W23-read-null-sentinel",
+        "W23-network-route-no-destroy",
+        "W23-diagnostics-buffer-close"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/job.js",
+        "dist/extensions/agent-browser/lib/command-policy.js",
+        "dist/extensions/agent-browser/lib/results/network-routes.js",
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js",
+        "dist/extensions/agent-browser/lib/session-diagnostics-buffer.js",
+        "tests-v2/wave23-qa-silent-pass.mjs",
+        "tests-v2/wave23-state-and-qa.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "700505e9795920bbff63f26b1fcd268182cd04d8fddad7a90c50681ad463fcb4",
+        "dist/extensions/agent-browser/lib/command-policy.js": "feb290ed2dbae46d95d9681600590873d49da04abf3a52a4fdce9e9779268c3b",
+        "dist/extensions/agent-browser/lib/results/network-routes.js": "1f5a63d436155e4db7698b1a24b94859bc9825f13ffbcd7b02c2e91b2afdd635",
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "818c7fac954caac4a346b992b142ee1a84bca1546c36219fabdd781a38fca5b3",
+        "dist/extensions/agent-browser/lib/session-diagnostics-buffer.js": "6f70940e72c33e3d8d2c5f940c6cd114dadab3cb56d9264782071891188c5df8",
+        "tests-v2/wave23-qa-silent-pass.mjs": "4787c4800ae2fc563237a31413624f0b8efa4fb6090df4ef9833318736f14bc7",
+        "tests-v2/wave23-state-and-qa.mjs": "897070168c9ed07a4ee5255ab347fd25789e3b963639cafd4e42a147f2d4a553"
+      },
+      "upstreamDefect": "Wrapper-local, three distinct silent-lying paths found by the remaining reviewer lanes and each CONFIRMED by running it before the fix. (1) The qa preset path still carried the pre-fix defect class that debug was corrected for in wave22: an empty expectedText compiled into a preset that asserted nothing and reported \"QA preset passed\"; a preset whose batch returned no rows produced no verdict at all yet the run stayed succeeded; and a wait --fn row whose verdict could not be read fell through to return true, scoring an unreadable predicate as a PASS. All three now report absent or unreadable as neither pass nor fail, matching the debug.js contract. (2) isBrowserIndependentRead tested !== undefined, and null !== undefined, so every MALFORMED read was classified as a browser-independent read — the exact opposite of the comment on that function — which skipped the managed-session ownership check and page-target validation for a call the wrapper already knew was malformed. (3) applyNetworkRouteRecords returned undefined for a route command with no pattern, which the caller turns into \"erase every route for this session\", after which buildNetworkRouteDiagnostics returned undefined and the unfulfilled/CORS/pending diagnostics stopped firing with no message; it also persisted a flag as a URL pattern (network route --abort stored {pattern:\"--abort\"}). Malformed route commands are now no-ops. Separately, resetDiagnosticsBufferState had ZERO callers in dist/, so a closed session kept its dedup buffer and a browser reopened under the same name had brand-new rows reported as already-reported.",
+      "offlineTest": "tests-v2/wave23-qa-silent-pass.mjs, tests-v2/wave23-state-and-qa.mjs",
+      "verifiedLive": "Source-verified and offline-verified, sabotage-verified four ways; all pending restart. One real bug was introduced and caught inside this same change: the empty-expectedText guard first tested the DERIVED array, but omitting expectedText produces the same empty-array sentinel that means \"no text check was requested\", so it refused every legitimate preset. Caught by an assertion that an omitted expectedText still compiles. And one of the four state sabotage checks did not bite, because the dedup-buffer fix had no test; the coverage was then written and the sabotage confirmed to fail."
     }
   ]
 }

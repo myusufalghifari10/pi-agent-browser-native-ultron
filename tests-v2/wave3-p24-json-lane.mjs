@@ -31,7 +31,14 @@ resetDiagnosticsBufferState();
     step();
     assert.equal(envelope.appended.length, 1, "plain JSON payload gets a fresh envelope with the dedup note");
     step();
-    assert.match(envelope.appended[0], /1 new console row\(s\) since the previous read\./, "note text preserved inside appended");
+    // CONTRACT CHANGE (wave23, reviewer lane): the note used to end "since the previous read." with no
+    // qualifier. That is only true within one loaded process — the dedup buffer is module state with
+    // no restore path, so after /reload or /resume the first read re-announces every row as new. The
+    // note now names the limit rather than implying a baseline the wrapper does not have. The rest of
+    // this lane (envelope shape, payload preservation, structured details) is unchanged and still
+    // asserted below, so a future change to the envelope still fails here.
+    assert.match(envelope.appended[0], /1 new console row\(s\) since the previous read in this process/, "note text preserved inside appended, now qualified by the process boundary");
+    assert.match(envelope.appended[0], /reload or resume starts this count over/, "the note must name the reload/resume reset rather than implying an unbounded baseline");
     step();
     assert.equal(envelope.result.messages.length, 1, "payload object preserved under result");
     step();
@@ -58,7 +65,7 @@ resetDiagnosticsBufferState();
     const out = applyDiagnosticsBufferDedup({ command: "console", data, result: baseResult("not json prose"), sessionKey: "s3", jsonLane: true });
     step();
     assert.throws(() => JSON.parse(out.content[0].text), "prose fallback stays parse-breaking (historical behavior)");
-    assert.match(out.content[0].text, /1 new console row\(s\) since the previous read\./, "note appended as prose");
+    assert.match(out.content[0].text, /1 new console row\(s\) since the previous read in this process/, "note appended as prose, qualified by the same process boundary as the JSON lane above (wave23 contract change)");
     step();
 }
 
@@ -68,7 +75,10 @@ resetDiagnosticsBufferState();
     const out = applyDiagnosticsBufferDedup({ command: "console", data, result: baseResult(JSON.stringify({ messages: [1] })), sessionKey: "s4", jsonLane: false });
     step();
     assert.throws(() => JSON.parse(out.content[0].text), "non-JSON lane keeps the prose append");
-    assert.match(out.content[0].text, /^[\s\S]*\n\n1 new console row\(s\) since the previous read\.$/, "prose append formula unchanged");
+    // The shape under test is the two-newline separator and the note as the final line. Asserting the
+    // exact trailing sentence here is what pinned the old unqualifiable wording, so the sentence is
+    // matched in full including its new qualifier, and the separation/placement is still asserted.
+    assert.match(out.content[0].text, /^[\s\S]*\n\n1 new console row\(s\) since the previous read in this process \(a Pi reload or resume starts this count over\)\.\s*$/, "prose append formula: separator and placement unchanged, wording qualified (wave23 contract change)");
     step();
 }
 

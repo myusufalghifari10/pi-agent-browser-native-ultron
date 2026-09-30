@@ -46,10 +46,24 @@ export function applyNetworkRouteRecords(routes, commandTokens, succeeded) {
         return routes;
     const existing = routes ?? [];
     const pattern = commandTokens[2];
-    if (subcommand === "route" && pattern)
+    // wave23, reported by a reviewer lane and CONFIRMED by running it before fixing. `if (!pattern)
+    // return undefined` did double damage: a `network unroute` with no pattern — or with an empty
+    // string, which is indistinguishable from absent here — returned undefined, and the caller's
+    // `next.delete(sessionName)` turned that into "erase every route for this session". The route
+    // table then read empty, buildNetworkRouteDiagnostics returned undefined, and the unfulfilled /
+    // CORS / pending-route diagnostics stopped firing with no message at all: a check that no longer
+    // ran, reported as if there were nothing to report.
+    //
+    // Separately, `network route --abort` stored {mode:"abort", pattern:"--abort"} — the flag itself
+    // persisted as a URL pattern. Verified by running it: the entry appeared in the route list.
+    //
+    // Both are now no-ops. Never destroying state on a malformed command is the floor: an incomplete
+    // unroute leaves routes armed and upstream reports the usage error, whereas the old path
+    // silently disarmed every mock the caller had configured.
+    if (typeof pattern !== "string" || pattern.length === 0 || pattern.startsWith("--"))
+        return existing.length > 0 ? existing : undefined;
+    if (subcommand === "route")
         return [...existing.filter((route) => route.pattern !== pattern), { mode: getNetworkRouteMode(commandTokens), pattern }];
-    if (!pattern)
-        return undefined;
     const next = existing.filter((route) => route.pattern !== pattern);
     return next.length > 0 ? next : undefined;
 }

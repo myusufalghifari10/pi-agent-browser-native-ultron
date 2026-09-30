@@ -7,8 +7,17 @@
 // diagnostic row it has already shown the model and can then ask for only the
 // rows never observed before in this session.
 //
-// The state is plain JSON so it can be persisted in tool `details` and replayed
-// from the Pi transcript after reload/resume.
+// The state is plain JSON so it can be written into tool `details`.
+//
+// It is WRITTEN there and NOT read back. A reviewer lane checked for a restore path and found none:
+// the sibling restore in index.js rebuilds sessionPageState, the artifact manifest, recording
+// reservations and electron records from the transcript, and has no line for this buffer. So after a
+// /reload or /resume the first read re-announces every already-seen row as new.
+//
+// This comment previously claimed the replay worked, which made the missing restore look like a
+// detail rather than a behaviour. Building the restore is a real feature and is not done here;
+// what is done is that the limitation is stated where a caller will meet it — the "N new" wording
+// below no longer claims a comparison the wrapper cannot actually make.
 import { isRecord } from "./parsing.js";
 
 export const DIAGNOSTICS_BUFFER_STATE_VERSION = 1;

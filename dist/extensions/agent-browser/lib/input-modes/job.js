@@ -449,7 +449,13 @@ function qaVisibleTextWaitPassed(item, step) {
         return item.result;
     if (isRecord(item.result) && typeof item.result.result === "boolean")
         return item.result.result;
-    return true;
+    // wave23: this fell through to `return true`, so a `wait --fn` row whose verdict could not be read
+    // — {waited: 5000}, a bare string, anything without a boolean — was scored as a PASS and the
+    // expected-text check reported clean for a predicate that never returned a verdict. debug mode had
+    // exactly this bug and was fixed for it in wave22 with readEvalVerdict returning undefined and
+    // raising an unverifiable counter; the qa path was missed. undefined is now the unreadable value
+    // and the caller below treats it as neither pass nor fail.
+    return undefined;
 }
 function extractQaTextAssertionResultText(item) {
     if (!item || item.success === false)
@@ -514,10 +520,23 @@ export function analyzeQaPresetTimeout(compiled) {
 }
 export function analyzeQaPresetResults(data, compiled) {
     const items = getBatchResultItems(data);
+    // wave23, reported independently by two reviewer lanes and CONFIRMED before fixing. This
+    // returned undefined for an empty row set, and the caller treats a null qaPreset as "no QA
+    // verdict was produced" — it does not print the failure text and does not print the pass text
+    // either, so the run kept whatever the subprocess exit code gave it and the result read as
+    // success with summary "Batch: 0/0 succeeded". The expected-text assertion never ran.
+    // A preset that asserted nothing must not be able to pass silently, so it says so instead.
     if (items.length === 0)
-        return undefined;
+        return {
+            failedChecks: ["the QA preset produced no batch rows, so nothing was inspected"],
+            passed: false,
+            summary: "QA preset returned no batch rows, so nothing was inspected. This is NOT a pass.",
+            unverifiableChecks: ["expectedText", "checkConsole", "checkErrors", "checkNetwork"],
+            warnings: ["Upstream returned no batch rows for the compiled QA batch. Treat this as an absent result rather than a clean one, and re-run before trusting the page."],
+        };
     const failedChecks = [];
     const warnings = [];
+    const unverifiableChecks = [];
     const baselineErrorIndex = compiled?.checks.diagnosticsResetAtStart && compiled.checks.checkErrors
         ? compiled.steps.findIndex((step) => step.generatedFrom === "qa.errorBaselineAfterClear")
         : -1;
@@ -566,6 +585,13 @@ export function analyzeQaPresetResults(data, compiled) {
             const visibleTextPassed = qaVisibleTextWaitPassed(items[index], step);
             if (visibleTextPassed === true)
                 return;
+            if (visibleTextPassed === undefined) {
+                // Neither a pass nor a failure: the verdict could not be read. Reporting it as a
+                // failure trains callers to ignore real failures, and reporting it as a pass is the
+                // bug this whole wave has been removing.
+                unverifiableChecks.push(`expected text "${formatQaExpectedTextPreview(expected)}": the wait --fn verdict could not be read from the batch row`);
+                return;
+            }
             const actual = extractQaTextAssertionResultText(items[index]);
             if (!actual || !actual.includes(expected))
                 failedChecks.push(`expected text not found: ${formatQaExpectedTextPreview(expected)}`);
@@ -573,6 +599,18 @@ export function analyzeQaPresetResults(data, compiled) {
     }
     const uniqueFailures = [...new Set(failedChecks)];
     const uniqueWarnings = [...new Set(warnings)];
+    const uniqueUnverifiable = [...new Set(unverifiableChecks)];
+    // An unverifiable check blocks the pass verdict, exactly as debug.js does: "the page is clear" must
+    // never rest on a check whose result nobody could read.
+    if (uniqueUnverifiable.length > 0) {
+        return {
+            failedChecks: uniqueFailures,
+            passed: false,
+            summary: `QA preset: ${uniqueUnverifiable.length} assertion verdict(s) could not be read from the batch result, so the page is NOT cleared.${uniqueFailures.length > 0 ? ` It also failed: ${uniqueFailures.join("; ")}.` : ""}`,
+            unverifiableChecks: uniqueUnverifiable,
+            warnings: uniqueWarnings,
+        };
+    }
     return {
         failedChecks: uniqueFailures,
         passed: uniqueFailures.length === 0,
@@ -612,8 +650,18 @@ export function compileAgentBrowserQaPreset(input) {
             : Array.isArray(rawExpectedText)
                 ? rawExpectedText
                 : undefined;
-    if (!expectedText || expectedText.some((text) => typeof text !== "string" || text.trim().length === 0)) {
-        return { error: "qa.expectedText must be a non-empty string or array of non-empty strings when provided." };
+    // wave23: an expectedText that IS an empty array used to compile into a preset that asserted
+    // nothing and then reported "QA preset passed." — a clean pass for a check that never ran.
+    //
+    // The emptiness test has to read the RAW input, not the derived array: omitting expectedText
+    // produces the same [] sentinel that means "this check was not requested", and testing the
+    // derived value refused every preset that legitimately asked for no text check. That mistake was
+    // caught by the test asserting an omitted expectedText still compiles, which is why it is stated
+    // here rather than left to be rediscovered.
+    if (input.expectedText !== undefined) {
+        const entries = Array.isArray(expectedText) ? expectedText : [];
+        if (entries.length === 0 || entries.some((text) => typeof text !== "string" || text.trim().length === 0))
+            return { error: "qa.expectedText must be a non-empty string or array of non-empty strings when provided." };
     }
     const expectedSelector = input.expectedSelector;
     if (expectedSelector !== undefined && (typeof expectedSelector !== "string" || expectedSelector.trim().length === 0)) {

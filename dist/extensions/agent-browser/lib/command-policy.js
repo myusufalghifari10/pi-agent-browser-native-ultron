@@ -125,11 +125,21 @@ export function getExplicitReadUrl(commandTokens) {
     }
     return llms && outline ? null : url;
 }
+// wave23, found by a reviewer lane: this tested `!== undefined`, and `null !== undefined` is true, so
+// every MALFORMED read was classified as a browser-independent read — the exact opposite of the intent
+// recorded on the line above this function ("null is invalid native syntax, which must not trigger page
+// helpers"). Confirmed by running it: `read --llms bogus <url>`, `read --bogus <url>` and a two-URL
+// `read` all return null and all were classified browser-independent, identically to a valid read.
+// That skipped needsManagedSession's managed-session ownership check and page-target validation for a
+// call the wrapper already knows is malformed. Only a real string URL is a browser-independent read.
 export function isBrowserIndependentRead(commandTokens, stdin) {
     if (commandTokens[0] !== "batch")
-        return getExplicitReadUrl(commandTokens) !== undefined;
+        return isReadUrl(getExplicitReadUrl(commandTokens));
     const steps = getUpstreamEffectiveBatchSteps(commandTokens, stdin);
-    return steps.length > 0 && steps.every((step) => getExplicitReadUrl(step) !== undefined);
+    return steps.length > 0 && steps.every((step) => isReadUrl(getExplicitReadUrl(step)));
+}
+function isReadUrl(readUrl) {
+    return typeof readUrl === "string" && readUrl.length > 0;
 }
 export function needsManagedSession(descriptor, stdin) {
     return !isSessionlessCommand(descriptor.upstreamCommandTokens) && !isBrowserIndependentRead(descriptor.upstreamCommandTokens, stdin);

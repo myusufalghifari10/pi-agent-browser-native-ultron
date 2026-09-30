@@ -90,7 +90,12 @@ export function applyDiagnosticsBufferDedup({ command, data, result, sessionKey,
         }
         const note = partition.seenCount > 0
             ? `${partition.seenCount} of ${rows.length} ${stream} row(s) were already reported earlier in this session (${partition.newCount} new). Upstream's clear does not purge its buffer, so treat repeats as the same events, not new ones.`
-            : `${partition.newCount} new ${stream} row(s) since the previous read.`;
+            // wave23: "since the previous read" is only true within one loaded process. The dedup
+            // buffer is module state with no restore path (checked by a reviewer lane and by grep:
+            // resetDiagnosticsBufferState had zero callers until the close-path fix), so after a
+            // /reload or /resume this first read reports every row as new. The wording says what the
+            // wrapper can actually support, so a caller is not told it has a baseline it does not have.
+            : `${partition.newCount} new ${stream} row(s) since the previous read in this process (a Pi reload or resume starts this count over).`;
         const details = {
             ...result.details,
             diagnosticsBuffer: {
@@ -556,6 +561,14 @@ export async function processBrowserOutput(input) {
                 networkRoutesBySession = new Map(networkRoutesBySession);
                 networkRoutesBySession.delete(sessionStateKey);
                 sessionPageState.clearSession(sessionStateKey);
+                // wave23, reported by a reviewer lane and CONFIRMED by grep before fixing:
+                // resetDiagnosticsBufferState had ZERO callers anywhere in dist/. Closing a session
+                // cleared attachedSessionKeys, networkRoutesBySession and sessionPageState but left
+                // the dedup buffer populated, so a browser REOPENED under the same session name had
+                // its brand-new console/error/network rows reported as "already reported earlier in
+                // this session" and skipped. The network fingerprint is method|url|status|requestId
+                // with no timestamp, so a row without a requestId collides exactly.
+                diagnosticsBufferBySession.delete(sessionStateKey);
                 state.closedManagedSessionNames.add(sessionStateKey);
             }
             else {
