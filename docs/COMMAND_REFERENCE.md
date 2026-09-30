@@ -14,29 +14,28 @@
 >
 > **What is broken on this build, so you do not have to rediscover it:**
 >
-> `batch` needs its steps in `stdin`, and this host mangles `stdin` before the tool is ever
-> entered. The symptom depends on how the parameter is declared, and both states were
-> live-tested:
+> `batch` is UNUSABLE here. It needs its steps in `stdin`, and this host validates `stdin` as an
+> array of string arrays BEFORE the tool body is entered, so nothing in the wrapper can repair it.
+> Both shapes were live-tested repeatedly, and the host rejects each of them:
 >
 > | you send | host delivers | result |
 > |---|---|---|
-> | `stdin` JSON string, `args` an array | the same text plus a stray `]` | `Invalid JSON input: trailing characters at line 1 column 32` |
+> | `stdin` a complete JSON string | the same text plus a stray `]` | `Invalid JSON input: trailing characters at line 1 column 32` |
+> | `stdin` a complete string, one `]` short | passed through once, rejected on every repeat | `Invalid JSON input: EOF while parsing a list` |
 > | `stdin` a nested array | `{item:{item:[{item:["get","url"]}]}}` | rejected, `stdin: must be string` |
 >
-> Both are the host re-shaping a value to match a declared type, and the host's own error
-> prints the received arguments verbatim if you want to see it yourself. This is upstream
-> behaviour - parameter stringification `earendil-works/pi#4226`, array-param envelope
-> `hermes-agent#104803` - not something the wrapper can repair, because the failure happens
-> before the tool body runs.
+> The one-closer-short form reached the wrapper exactly once out of three identical calls, so it is
+> a one-off and not a workaround. Do not build on it. `job` fails for the same reason: a JSON string
+> reached the job validator on one call and arrived mangled on the next, with identical parameters.
 >
-> `job` is unreliable for the same reason: a JSON string reached the job validator on one call
-> and arrived mangled on the next, with identical parameters.
+> This is upstream behaviour - parameter stringification `earendil-works/pi#4226`, array-param
+> envelope `hermes-agent#104803` - not something this extension can fix.
 >
-> **So prefer two top-level `args` calls over one batch.** Every batch failure message quotes
-> the value that actually arrived, so read it before changing your call shape - the wrapper's
-> own guesses about this host were wrong five times in a row.
+> **So: use two or more top-level `args` calls instead of one batch.** A full search flow was
+> verified this way end to end after a restart: `open` a page, `snapshot -i`, `find role <role>
+> click`, `keyboard type <text>`, `keyboard type "\n"`, then `get url` to confirm where you landed.
+> Always confirm with `get url` or a fresh snapshot; a dispatched action is not a landed one.
 >
-
 Related docs:
 - [`../README.md`](../README.md)
 - [`TOOL_CONTRACT.md`](TOOL_CONTRACT.md)
