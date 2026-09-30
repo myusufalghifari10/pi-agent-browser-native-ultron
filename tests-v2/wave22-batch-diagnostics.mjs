@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 
 import { parseBatchStdinJsonArray } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
 import { getBatchFailureDetails } from "../dist/extensions/agent-browser/lib/results/presentation/batch.js";
+import { parseUserBatchStdin } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
 
 // ---- 1. the comma-join diagnostic ------------------------------------------------------
 
@@ -33,6 +34,32 @@ assert.deepEqual(okArray.steps, [["click", "@e3"], ["get", "url"]]);
 const okString = parseBatchStdinJsonArray("[[\"click\",\"@e3\"]]");
 assert.equal(okString.error, undefined, "the documented JSON-string form must still parse");
 assert.deepEqual(okString.steps, [["click", "@e3"]]);
+
+// ---- 0. the host's {item: ...} envelope, found by reading the received shape ---------------
+//
+// A correct [["get","url"]] arrives on this host as [{item:["get","url"]}]. Found by two live
+// calls whose message named the received keys; two earlier theories were wrong guesses.
+//
+// A step is always an array of tokens, so {item: ...} can never be a legitimate step. Stripping
+// the envelope therefore turns a hard failure into the call the caller meant to make.
+assert.deepEqual(parseUserBatchStdin([{ item: ["get", "url"] }]).steps, [["get", "url"]], "the live one-row envelope must be unwrapped, not rejected");
+assert.deepEqual(parseUserBatchStdin([{ item: ["get", "url"] }, { item: ["get", "title"] }]).steps,
+    [["get", "url"], ["get", "title"]], "the two-row envelope must be unwrapped too");
+
+// Unwrap only when EVERY element is exactly the envelope. A partial unwrap would silently accept a
+// mixed shape and run steps the caller never wrote, which is worse than the error it replaces.
+const partial = parseUserBatchStdin([{ item: ["get", "url"] }, ["get", "title"]]);
+assert.ok(partial.error, "a partially-enveloped batch must be refused, not half-accepted");
+assert.match(partial.error, /arrived as an object with keys \[item\]/, "the refused step must name what it really was");
+
+// A two-key object is not the envelope, so it must not be unwrapped either.
+const twoKeys = parseUserBatchStdin([{ item: ["get", "url"], extra: 1 }]);
+assert.ok(twoKeys.error, "an object with more than the item key is not the host envelope");
+assert.match(twoKeys.error, /keys \[item, extra\]/, "all received keys must be named");
+
+// The forms that already worked must keep working.
+assert.deepEqual(parseUserBatchStdin([["get", "url"]]).steps, [["get", "url"]], "a plain 2-D array must be untouched");
+assert.deepEqual(parseUserBatchStdin('[["get","url"]]').steps, [["get", "url"]], "the JSON-string form must be untouched");
 
 // The shape that ACTUALLY happens on this host, observed live after a restart: a correct
 // [["get","url"]] arrives as ["get","url"] — the 2D level is lost. The first version of this fix
@@ -120,4 +147,4 @@ assert.equal(first.missingSettleHint, undefined, "a first-step failure has no pr
 // A fully successful batch has no failure details at all.
 assert.equal(getBatchFailureDetails([step(true, 'click a'), step(true, 'click b')]), undefined, "a clean batch reports no failure");
 
-console.log("wave22-batch-diagnostics: all assertions passed (flattening cause named, working forms still parse, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");
+console.log("wave22-batch-diagnostics: all assertions passed (item envelope stripped, working forms still parse, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");

@@ -66,6 +66,15 @@ export function parseBatchCommandArgument(command) {
         tokens.push(token);
     return tokens.length > 0 ? { step: tokens } : { error: "batch command is empty" };
 }
+/** The host's nested-array envelope: an object whose ONLY key is `item` and whose value is an array. */
+function isItemEnvelope(value) {
+    return value !== null
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && Object.keys(value).length === 1
+        && "item" in value
+        && Array.isArray(value.item);
+}
 function validateUserBatchStep(step, index) {
     if (!Array.isArray(step)) {
         // Name what actually arrived. A caller who sent [[..],[..]] on this host gets something
@@ -121,6 +130,22 @@ export function parseBatchStdinJsonArray(stdin) {
         // which describes the shape and never the cause, so a caller could not find the fix: the
         // steps must be sent as a JSON string. Both shapes are invalid — a valid step is always an
         // array — so blaming the host is only ever a guess, and the message says so.
+        // wave22 LIVE: this host wraps every nested array parameter in an {item: ...} envelope, so
+        // a correct [["get","url"],["get","title"]] arrives as
+        //     [{item:["get","url"]}, {item:["get","title"]}]
+        // Confirmed by two live calls, one row and two rows, both reporting "arrived as an object
+        // with keys [item]". Two earlier fixes were wrong because both guessed at this: comma
+        // joining, then flattening. Neither matched; only reading the received shape settled it.
+        //
+        // A step is ALWAYS an array of tokens, so {item: ...} can never be a legitimate step. That
+        // makes the envelope safe to strip rather than merely describe, and stripping it turns a
+        // hard failure into the call the caller meant to make. Unwrap only when EVERY element is
+        // exactly this envelope — a partial unwrap would silently accept a mixed shape and run
+        // steps that were not what the caller wrote.
+        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((row) => isItemEnvelope(row))) {
+            parsed = parsed.map((row) => row.item);
+        }
+
         if (parsed.length > 0 && parsed.every((row) => typeof row === "string")) {
             // More than one plain string is a flattened argv: a single step is always one array,
             // so several loose tokens can only mean the 2D shape lost a level. A lone bare word is
