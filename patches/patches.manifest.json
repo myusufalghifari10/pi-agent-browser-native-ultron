@@ -162,9 +162,10 @@
         "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "03e40f3514173c27f66e2a35f2ac3f595103183b5960340334db63e44fd34fb3"
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "b12592b91b87b781db1b829937d372f3dd8eba3edfbfae1e95118e7cbebfe574"
       },
-      "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type."
+      "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type.",
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30. The live shape is FLATTENING, not comma-joining: a correct [[\"get\",\"url\"]] arrives as [\"get\",\"url\"], the 2D level lost. The first fix assumed comma-joining and did not fire on the real failure - only the restart plus a live call caught it. The message now reports what actually arrived, names host re-serialization when a multi-token argv or a comma proves it, and stays HEDGED for a lone bare word rather than accusing the host for a hand-built mistake."
     },
     {
       "id": "PL1",
@@ -299,11 +300,11 @@
         "tests-v2/wave22-batch-diagnostics.mjs"
       ],
       "sha256": {
-        "tests-v2/wave22-batch-diagnostics.mjs": "898b11fb51c1ac86e58a43750ff2698ad45770fc4d2f3d2cfcd3feeb4ec14394"
+        "tests-v2/wave22-batch-diagnostics.mjs": "56b830e759c571a59e230daeef2ce82d102c4e0f0115257c21fa56205409ec70"
       },
       "upstreamDefect": "Wrapper-local diagnostics, not an upstream defect. Proven live on a real 65-question exam: (1) the host comma-joins a nested array stdin param, so a correct [[..],[..]] arrives as an array of strings, and the old error blamed 'step 0 must be a non-empty array' - the shape, never the cause, so the caller could not find the JSON-string fix on its own. (2) batch steps run back-to-back, so a click that navigates followed by a step targeting an element that only exists on the new page reports 'Element not found' and the caller naturally concludes the selector is wrong; the failing step is correct and the missing wait is the bug. The comma is the discriminator for (1) so a hand-built mistake is never blamed on the host, and the page-change check reads the existing command taxonomy rather than a hand-kept list, because a first attempt matching only 'click' missed 'open'.",
       "offlineTest": "tests-v2/wave22-batch-diagnostics.mjs",
-      "verifiedLive": "derived from a live 65-question exam run; the new messages themselves need a restart to observe"
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30. The real shape is FLATTENING ([[\"get\",\"url\"]] arrives as [\"get\",\"url\"]), not comma-joining - the first fix assumed comma-joining and did not fire, and only the restart plus a live call caught it. Both diagnostics now observed against the live host."
     }
   ]
 }

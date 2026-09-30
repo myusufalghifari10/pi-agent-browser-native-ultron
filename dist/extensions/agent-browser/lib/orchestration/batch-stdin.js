@@ -106,24 +106,31 @@ export function parseBatchStdinJsonArray(stdin) {
         if (!Array.isArray(parsed)) {
             return { error: `agent_browser batch stdin must be a JSON array of command steps.${BATCH_STDIN_EXAMPLE}` };
         }
-        // wave22: this host re-serializes a nested array param by comma-joining it, so a
-        // perfectly correct [["click","a"],["click","b"]] can arrive as ["click,a,click,b"] —
-        // an array of STRINGS. The old error then blamed "step 0 must be a non-empty array",
-        // which points at the shape and never at the cause, so a caller could not tell that the
-        // fix is to pass stdin as a JSON string. Proven live: an agent burned many calls here
-        // before discovering the JSON-string form on its own.
-        //
-        // The comma is the discriminator, and it is load-bearing. A single-element array whose
-        // only element is a bare word is a hand-built mistake, not coercion — the existing
-        // wave11 contract asserts exactly that, and claiming the host did it would be a lie that
-        // sends the caller off debugging their host instead of their own call.
+        // wave22: this host re-serializes a nested array param and can deliver a batch stdin whose
+        // steps are NOT arrays. Two shapes were observed live, both from a perfectly correct
+        // [[..],[..]]:
+        //   flattened : [[\"get\",\"url\"]]      arrives as [\"get\",\"url\"]   (2D lost to 1D)
+        //   comma-joined: [[\"get\",\"url\"],[\"get\",\"title\"]] arrives as [\"get,url,get,title\"]
+        // The old error only said \"step 0 must be a non-empty array of string command tokens\",
+        // which describes the shape and never the cause, so a caller could not find the fix: the
+        // steps must be sent as a JSON string. Both shapes are invalid — a valid step is always an
+        // array — so blaming the host is only ever a guess, and the message says so.
         if (parsed.length > 0 && parsed.every((row) => typeof row === "string")) {
-            const joined = parsed.filter((row) => row.includes(","));
-            if (joined.length === parsed.length) {
+            // More than one plain string is a flattened argv: a single step is always one array,
+            // so several loose tokens can only mean the 2D shape lost a level. A lone bare word is
+            // ambiguous, so that case keeps the old message — which was already correct for it —
+            // and only gains the hint. Claiming host flattening there would send the caller to
+            // debug their host instead of their own call, and wave11 pins that message.
+            const commaJoined = parsed.some((row) => row.includes(","));
+            const looksLikeArgv = parsed.length > 1;
+            if (commaJoined || looksLikeArgv) {
                 return {
-                    error: `agent_browser batch stdin arrived COMMA-JOINED by the host: ${parsed.length === 1 ? "your steps were flattened into a single string" : `your ${parsed.length} steps were flattened into strings`} (${JSON.stringify(parsed).slice(0, 120)}). This host re-serializes a nested array parameter, so steps must be passed as a JSON STRING: {"stdin": "[[\\"click\\",\\"@e3\\"]]"}. Sending it any other way fails here even when the steps are correct.${BATCH_STDIN_EXAMPLE}`,
+                    error: `agent_browser batch stdin arrived as ${parsed.length} plain string${parsed.length === 1 ? "" : "s"}, but every step must be a non-empty array of command tokens. This host re-serializes a nested array parameter, so a correct [[..],[..]] was flattened on the way in. Send stdin as a JSON STRING and it survives: {"stdin": "[[\\"get\\",\\"url\\"]]"}.${BATCH_STDIN_EXAMPLE}`,
                 };
             }
+            return {
+                error: `agent_browser batch stdin step 0 must be a non-empty array of string command tokens. If you meant [["get","url"]], send stdin as a JSON STRING: {"stdin": "[[\\"get\\",\\"url\\"]]"} — a nested array parameter is re-serialized by this host, so the array form may not survive.${BATCH_STDIN_EXAMPLE}`,
+            };
         }
         return { steps: parsed };
     }

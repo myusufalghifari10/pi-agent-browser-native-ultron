@@ -62,4 +62,4 @@ assert.deepEqual(result, { ok: true, skipped: false, drifted: [], missing: [], m
 // 5. Manifest + hashes are cached in module scope: second call returns the identical verdict.
 assert.equal(await verifyPatchLedger(), result);
 
-console.log("wave1-a-patch-ledger: all assertions passed (16 entries, gate before spawn, verdict cached)");
+console.log("wave1-a-patch-ledger: all assertions passed (21 entries, gate before spawn, verdict cached)");

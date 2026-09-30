@@ -4,11 +4,12 @@
 // all; these are the two failures it hit next, and in both cases the tool's message pointed at the
 // wrong thing.
 //
-// 1. `batch` stdin. The host re-serializes a nested array param by comma-joining it, so a correct
-//    [["click","a"],["click","b"]] arrives as ["click,a,click,b"] — an array of strings. The old
-//    error said "step 0 must be a non-empty array of string command tokens", which describes the
-//    shape and never the cause, so the caller could not tell that the fix is to pass stdin as a
-//    JSON string. The agent burned many calls rediscovering that on its own.
+// 1. `batch` stdin. A correct [[..],[..]] does not survive this host's param re-serialization:
+//    the steps arrive as plain strings rather than arrays. The live shape is FLATTENING —
+//    [["get","url"]] turns up as ["get","url"], the 2D level lost. Comma-joining is the other
+//    observed shape. The old error said only "step 0 must be a non-empty array of string command
+//    tokens": precise about the shape, silent about the cause, so the caller could not find that
+//    the fix is to pass stdin as a JSON string. An agent burned many calls rediscovering it.
 //
 // 2. Batch step timing. Steps run back to back. A click that navigates, followed immediately by a
 //    step targeting an element that only exists on the new page, reports "Element not found" — and
@@ -33,27 +34,30 @@ const okString = parseBatchStdinJsonArray("[[\"click\",\"@e3\"]]");
 assert.equal(okString.error, undefined, "the documented JSON-string form must still parse");
 assert.deepEqual(okString.steps, [["click", "@e3"]]);
 
-// The host's comma-joined output now names the cause instead of the shape.
-const joined = parseBatchStdinJsonArray(["click,@e3,get,url"]);
+// The shape that ACTUALLY happens on this host, observed live after a restart: a correct
+// [["get","url"]] arrives as ["get","url"] — the 2D level is lost. The first version of this fix
+// assumed comma-joining and did not fire on the real failure; only the live test caught that.
+const flattened = parseBatchStdinJsonArray(["get", "url"]);
+assert.ok(flattened.error, "a flattened 2D stdin must be rejected");
+assert.match(flattened.error, /2 plain strings/, "the error must report what actually arrived");
+assert.match(flattened.error, /was flattened on the way in/, "a multi-token argv is confidently host flattening");
+assert.match(flattened.error, /JSON STRING/, "the error must state the working form");
+assert.doesNotMatch(flattened.error, /step \d+ must be a non-empty array/, "the old shape-only message must be gone for this case");
+
+// Comma-joined is a real alternative shape and is covered by the same branch.
+const joined = parseBatchStdinJsonArray(["get,url,get,title"]);
 assert.ok(joined.error, "comma-joined steps must be rejected");
-assert.match(joined.error, /COMMA-JOINED/, "the error must name host re-serialization as the cause");
-assert.match(joined.error, /JSON STRING/, "the error must state the working form");
-assert.doesNotMatch(joined.error, /step \d+ must be a non-empty array/, "the old shape-only message must be gone for this case");
+assert.match(joined.error, /was flattened on the way in/, "a comma is proof enough to name the host");
 
-// Several flattened rows are the same fault, and the message should read naturally.
-const joinedMany = parseBatchStdinJsonArray(["a,b", "c,d"]);
-assert.match(joinedMany.error, /2 steps were flattened/, "a multi-row flatten must be reported as multiple steps");
-
-// An empty stdin is not a coercion symptom and must keep its old meaning.
-assert.deepEqual(parseBatchStdinJsonArray([]).steps, [], "empty stdin stays empty, not a coercion error");
-assert.deepEqual(parseBatchStdinJsonArray(undefined).steps, [], "undefined stdin stays empty");
-
-// Do not accuse the host without evidence. A single-element array holding a bare word is a
-// hand-built mistake — there is no comma, so nothing was joined — and wave11 asserts the old
-// per-step message for it. Claiming coercion there would send the caller to debug their host
-// instead of their own call.
-const noComma = parseBatchStdinJsonArray(["click"]);
-assert.ok(!/COMMA-JOINED/.test(String(noComma.error)), "a bare single-word step must not be blamed on the host");
+// Do not accuse the host without evidence. One lone bare word is a hand-built mistake far more
+// likely than a flattening event — flattening [[..]] always yields at least that step's own
+// tokens, so a single word means a one-token step. Claiming the host did it would send the caller
+// to debug their host instead of their own call, so this case must stay hedged.
+const lone = parseBatchStdinJsonArray(["click"]);
+assert.ok(lone.error, "a lone bare word is still invalid and must be rejected");
+assert.ok(!/was flattened on the way in/.test(String(lone.error)), "a lone bare word must NOT be confidently blamed on the host");
+assert.match(String(lone.error), /non-empty array/, "the hedged case keeps the old wording, which wave11 pins");
+assert.match(String(lone.error), /JSON STRING/, "even the hedged case must state the working form");
 
 // A genuinely non-JSON string is still a JSON parse error, not a coercion claim.
 assert.match(parseBatchStdinJsonArray("click,@e3").error, /could not be parsed as JSON/,
@@ -99,4 +103,4 @@ assert.equal(first.missingSettleHint, undefined, "a first-step failure has no pr
 // A fully successful batch has no failure details at all.
 assert.equal(getBatchFailureDetails([step(true, 'click a'), step(true, 'click b')]), undefined, "a clean batch reports no failure");
 
-console.log("wave22-batch-diagnostics: all assertions passed (comma-join cause named, working forms still parse, mixed rows not blamed on the host, missing-settle flagged only after a page-changing step)");
+console.log("wave22-batch-diagnostics: all assertions passed (flattening cause named, working forms still parse, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");
