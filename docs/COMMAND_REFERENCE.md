@@ -2,9 +2,8 @@
 
 > **Read this before the first `agent_browser` call of a session.**
 >
-> `stdin` as a plain string works. An earlier version of this file said otherwise and was wrong:
-> only the `batch` path reshapes it. The three forms below are what actually works, in the order you
-> should reach for them.
+> Four forms, in the order you should reach for them. Two of the four were broken in earlier
+> versions of this file and are now fixed or retired; the notes say which.
 >
 > **1. A single command — `args` as a plain array of strings.**
 >
@@ -14,39 +13,50 @@
 > {"args": ["--session", "ultron1", "get", "url"]}
 > ```
 >
-> **2. Anything multi-step — `eval --stdin`. This is the good one, and it is not obvious.**
+> **2. Anything multi-step — `eval --stdin`.** `stdin` arrives as free text, completely intact, and
+> may be any JavaScript expression. One call can read several things, act, and return structured
+> data. Verified live on a real page.
 >
 > ```
 > {"args": ["--session", "ultron1", "eval", "--stdin"],
 >  "stdin": "(() => { const b = document.querySelector('button'); b.click(); return b.innerText; })()"}
 > ```
 >
-> `stdin` arrives as free text, completely intact, and may be any JavaScript expression. One call can
-> read several things, act, and return structured data — which is how a 65-question assessment was
-> driven end to end, two calls per question instead of five. Verified live: an async IIFE that reads
-> the page, clicks a control, waits for a re-render, and reports the resulting state all in one call.
+> **3. Declarative multi-step with built-in verification — `job`.** Works, and earlier versions of
+> this file were wrong to call it unreliable.
 >
-> Use it for: reading a page precisely instead of scraping whole `innerText`, clicking something
-> whose selector keeps changing, waiting for a state change, and anything you would otherwise do as
-> three separate calls.
+> ```
+> {"job": {"session": "ultron1", "steps": [{"action": "snapshot"}, {"action": "assertUrl", "url": "skillbuilder.aws"}]}}
+> ```
 >
-> **3. `batch` only — broken on this build, do not use it.**
+> Each step reports its own outcome and a failed step stops the rest under `--bail`. Prefer this
+> over `eval --stdin` when you want per-step verification (`assertUrl`, `assertText`,
+> `waitForDownload`) rather than a single expression you have to write the checks inside.
 >
-> `batch` needs its steps in `stdin`, and this host reshapes `stdin` into an array of string arrays
-> specifically for that command, before the tool body is entered. Nothing in the wrapper can repair
-> it, and all of these were live-tested and rejected:
+> **4. `batch` — retired, do not call it.** Supplying batch steps yourself cannot work on this
+> build: the host reshapes the `stdin` tool parameter into an array of string arrays specifically
+> for that command, before the tool body is entered. Nothing in the wrapper can repair it. It is
+> now refused outright with a message pointing here.
 >
-> | you send | result |
+> | you send | result before it was retired |
 > |---|---|
 > | complete JSON string | `Invalid JSON input: trailing characters at line 1 column 32` |
 > | the same string one `]` short | `Invalid JSON input: EOF while parsing a list` |
 > | a nested array | `{item:{item:[...]}}` wrapped, then rejected: `stdin: must be string` |
 >
-> `job` is unreliable for the same reason. If you need several steps, write one `eval --stdin`
-> expression that performs them, or make several `args` calls.
+> **Why `batch` is retired but `job` works — this trips people up.** `job` compiles down to a
+> batch internally (`["batch","--bail"]` plus stdin) and that batch runs fine. The difference is
+> *where the stdin comes from*. `job` builds it in JavaScript inside the wrapper, so the host
+> never sees it; the wrapper even refuses a caller-supplied `stdin` alongside `job`, because those
+> modes generate their own. Only text you supply in the `stdin` tool parameter crosses the boundary
+> the host reshapes. `checkpoint` restore, `debug`, `login` and `lookups` work for the same reason.
 >
-> Every parse failure quotes the value that actually arrived, so read it before changing your call
-> shape. Five fixes in this area were wrong guesses about the host; the quoting is what ended that.
+> The same `{item: ...}` host envelope also reaches the `job` object itself, and it is stripped at
+> all three levels, so a correct job no longer reports `job.steps must be a non-empty array`.
+> Verified live: a two-step job ran both steps to completion.
+>
+> Every parse failure quotes the value that actually arrived. Read it before changing your call
+> shape — five fixes in this area were wrong guesses about the host, and the quoting ended that.
 >
 Related docs:
 - [`../README.md`](../README.md)
