@@ -121,7 +121,7 @@
         "dist/extensions/agent-browser/lib/results/presentation/batch.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/results/presentation/batch.js": "aa3e5e44d5d968cba4756a8761ca2f5a4f5ec9bab9e768d9919e20c159ec9a69"
+        "dist/extensions/agent-browser/lib/results/presentation/batch.js": "22ab4dbc134b98bf1cf2eb3aca0bfef8aee485917470f55564ee84a3c332dee7"
       },
       "upstreamDefect": "Batch snapshot --search/--filter steps were presented unfiltered, contradicting the same command run directly."
     },
@@ -300,7 +300,7 @@
         "tests-v2/wave22-batch-diagnostics.mjs"
       ],
       "sha256": {
-        "tests-v2/wave22-batch-diagnostics.mjs": "56b830e759c571a59e230daeef2ce82d102c4e0f0115257c21fa56205409ec70"
+        "tests-v2/wave22-batch-diagnostics.mjs": "eb7f2a993720d54c0950fbf1d8c767eac06f1f7c167b1db21d1e1aa2490fb18b"
       },
       "upstreamDefect": "Wrapper-local diagnostics, not an upstream defect. Proven live on a real 65-question exam: (1) the host comma-joins a nested array stdin param, so a correct [[..],[..]] arrives as an array of strings, and the old error blamed 'step 0 must be a non-empty array' - the shape, never the cause, so the caller could not find the JSON-string fix on its own. (2) batch steps run back-to-back, so a click that navigates followed by a step targeting an element that only exists on the new page reports 'Element not found' and the caller naturally concludes the selector is wrong; the failing step is correct and the missing wait is the bug. The comma is the discriminator for (1) so a hand-built mistake is never blamed on the host, and the page-change check reads the existing command taxonomy rather than a hand-kept list, because a first attempt matching only 'click' missed 'open'.",
       "offlineTest": "tests-v2/wave22-batch-diagnostics.mjs",

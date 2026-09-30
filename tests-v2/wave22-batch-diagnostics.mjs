@@ -80,7 +80,7 @@ const navigated = getBatchFailureDetails([
     step(true, 'click [data-testid=next-question-button]'),
     step(false, 'click [data-testid=radio-group-75e61795]'),
 ]);
-assert.equal(navigated.missingSettleHint, true, "a failure right after a click must be flagged as possibly a timing failure");
+assert.deepEqual(navigated.missingSettleHint, ["click"], "a failure right after a click must be flagged as possibly a timing failure");
 
 // Without a preceding click it is an ordinary selector problem and must NOT be excused.
 const plain = getBatchFailureDetails([
@@ -94,7 +94,24 @@ const opened = getBatchFailureDetails([
     step(true, 'open https://example.com'),
     step(false, 'click #submit'),
 ]);
-assert.equal(opened.missingSettleHint, true, "a step after `open` also needs a settle before the next one");
+assert.deepEqual(opened.missingSettleHint, ["open"], "a step after `open` also needs a settle before the next one");
+
+// The hint must NAME the command that preceded it. The first live run of this printed "That step
+// follows a click" when the preceding step was `open` — a message that is wrong in the same way
+// this whole wave exists to remove, so the command name is part of the contract now.
+const named = getBatchFailureDetails([
+    step(true, 'open https://example.com/'),
+    step(true, 'click #a'),
+    step(false, 'click #missing'),
+]);
+assert.deepEqual(named.missingSettleHint, ["open", "click"], "the hint must list the page-changing commands, not just a flag");
+
+// Two different page-changers both get named rather than collapsed into a generic "a click".
+const oneOfEach = getBatchFailureDetails([
+    step(true, 'open https://example.com/'),
+    step(false, 'click #missing'),
+]);
+assert.deepEqual(oneOfEach.missingSettleHint, ["open"], "an `open` predecessor must be reported as open, never as click");
 
 // The very first step cannot be a timing victim: there is nothing before it.
 const first = getBatchFailureDetails([step(false, 'click #submit')]);

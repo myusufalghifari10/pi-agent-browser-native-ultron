@@ -67,7 +67,7 @@ export function getBatchFailureDetails(steps) {
     // `open` is a clearer page change than a click, and the first attempt at this only matched
     // "click", which a test caught. readOnly commands are excluded on purpose — a `get url`
     // followed by a failed selector really is a wrong selector.
-    const changedPageEarlier = steps.slice(0, failedIndex).some((step) => {
+    const pageChangingCommands = steps.slice(0, failedIndex).filter((step) => {
         const commandText = step.details?.commandText;
         if (typeof commandText !== "string" || commandText.trim() === "") return false;
         const tokens = commandText.trim().split(/\s+/);
@@ -76,13 +76,13 @@ export function getBatchFailureDetails(steps) {
             || isOpenNavigationCommand(command)
             || isPageMutationCommand(command, tokens[1])
             || isUnverifiedPageTransitionCommand(command, tokens[1]);
-    });
+    }).map((step) => step.details.commandText.trim().split(/\s+/)[0]);
     return {
         failedStep: failedSteps[0].details,
         failureCount: failedSteps.length,
         successCount,
         totalCount: steps.length,
-        ...(changedPageEarlier ? { missingSettleHint: true } : {}),
+        ...(pageChangingCommands.length > 0 ? { missingSettleHint: pageChangingCommands } : {}),
     };
 }
 function hasModelFacingArgRedaction(args) {
@@ -467,8 +467,8 @@ export async function buildBatchPresentation(options) {
             batchSummary,
             `First failing step: ${batchFailure.failedStep.index + 1} — ${batchFailure.failedStep.commandText}`,
             batchFailure.failureCount > 1 ? `${batchFailure.failureCount} steps failed. See the per-step results below.` : "See the per-step results below.",
-            batchFailure.missingSettleHint === true
-                ? "That step follows a click, and batch steps run back-to-back with no settle between them. If the earlier click navigated or re-rendered, this step ran before the new page existed — that is a TIMING failure, not a wrong selector. Insert a wait after any click that changes the page: [[\"click\",\"...\"],[\"wait\",\"900\"],[\"click\",\"...\"]]."
+            batchFailure.missingSettleHint !== undefined
+                ? `That step follows a page-changing step (${[...new Set(batchFailure.missingSettleHint)].map((c) => `\`${c}\``).join(", ")}), and batch steps run back-to-back with no settle between them. If the earlier ${batchFailure.missingSettleHint.length === 1 ? "step" : "steps"} navigated or re-rendered, this step ran before the new page existed — that is a TIMING failure, not a wrong selector. Insert a wait after any step that changes the page: [[\"click\",\"...\"],[\"wait\",\"900\"],[\"click\",\"...\"]].`
                 : undefined,
         ].filter((line) => line !== undefined).join("\n");
     const text = [failureHeader, mutationEvidenceText, stepText].filter((line) => line !== undefined).join("\n\n");
