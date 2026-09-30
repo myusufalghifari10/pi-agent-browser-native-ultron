@@ -366,7 +366,7 @@
         "tests-v2/wave22-session-threading-audit.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/debug.js": "aed126ee385f4c38941bdbdd0905d9cbaab4b5f14c2ee38f58777ffe82e1cf3e",
+        "dist/extensions/agent-browser/lib/input-modes/debug.js": "a8d7c9637ce19402f498138a23e1a4fe058672bd33c201fb85e2756e4065e06d",
         "tests-v2/wave22-session-threading-audit.mjs": "6ef43be4b9b655591d09bd50da283ca267bcc8abe74701154868b1615a672c2f"
       },
       "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserDebug never handled `session` at all — the field was absent from the compiler and argv was a bare [\"batch\",\"--bail\"] — so a devtools report requested for a named session ran against the root session. Same class as the sourceLookup defect fixed earlier in this wave. Audited the whole input-modes directory: debug was the only remaining mode that both builds argv and accepts a session without threading it. job, act, networkSourceLookup and login (via the P27 runtime dispatch wrapper) were already correct.",
@@ -391,7 +391,8 @@
     {
       "id": "P-W22-debug-verdict",
       "patches": [
-        "W22-debug-verdict-shape"
+        "W22-debug-verdict-shape",
+        "W22-debug-verdict-reader"
       ],
       "files": [
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js",
@@ -399,11 +400,11 @@
       ],
       "sha256": {
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "52a0c69f09f9e32c9ebfdef703b1579f7e054f9b7b7c5dc92e411aefe52d421e",
-        "tests-v2/wave22-debug-verdict.mjs": "662189455fff7e608e25aed8872a06219de2162cd49297f5734a18ea07bfdf5a"
+        "tests-v2/wave22-debug-verdict.mjs": "df77d491e425ac99fa219bebaf9c7fb55d8710550ce0bb53fbfe5f78bb44c6da"
       },
       "upstreamDefect": "Wrapper-local defect against a correct analyzer. analyzeDebugPresetResults expects the CHECKS half of a compiled debug, but process-output.js passed the whole compiled object. The analyzer reads input.expectedText / expectedSelector / evalExpression directly and those live one level down under `.checks`, so getExpectedEvalRoles returned an empty list and no eval row was ever assigned a role. One call site, one property access.",
       "offlineTest": "tests-v2/wave22-debug-verdict.mjs",
-      "verifiedLive": "BUG FOUND LIVE, fix offline-verified and sabotage-verified, pending restart. A live debug run on a page that does NOT contain the requested text reported expectedTextChecked 0 and 'no failures detected'. Reproduced offline: passing the compiled object yields expectedTextChecked 0 / expectedTextMissing false, passing compiled.checks yields 1 / true. This is a false clean bill of health — a caller is told a page passed assertions that never ran, which is worse than a crash because it is trusted. The test also pins that a SATISFIED assertion still reads as passing, so the fix cannot degenerate into 'always report failure'."
+      "verifiedLive": "BUG FOUND LIVE TWICE, second root cause now identified. (1) process-output.js passed the whole compiled object where the analyzer expects the checks half, so every eval row went unassigned and the report said 'no failures detected' for a page missing the requested text. (2) That fix alone made things WORSE and was caught live: the analyzer reads item.result, but it is handed PRESENTATION rows whose successful steps have no 'result' key at all — they carry data/text/summary/success. So 'passed' was false for every assertion, always. Proved live: a data: page containing 'Halo Dunia' returned true from the eval row and the report still said 'expected text not found'. The reader now finds the verdict on both shapes, and an unreadable verdict is a THIRD outcome ('could not be read') that is never summarised as clean — an unreadable verdict looks exactly like a pass to the old code, which is how the original bug hid."
     }
   ]
 }

@@ -58,4 +58,37 @@ assert.match(callSite, /compiledDebug\.checks/,
 assert.doesNotMatch(callSite, /,\s*prepared\.compiledDebug\)\.report/,
     "the call site must not pass the bare compiled object again");
 
-console.log("wave22-debug-verdict: all assertions passed (verdicts survive to the report, a failing page is not reported clean, a passing one still passes, call site pinned)");
+// --- the shape that actually reached the analyzer ------------------------------------------
+// The analyzer is handed PRESENTATION rows, and a successful step's `details` carries no `result`
+// key at all. Proved live: the eval row rendered `true` for a page that contains the text, and the
+// report said "expected text not found". So the reader must find the verdict where the pipeline
+// actually leaves it, or every assertion reports as failing.
+const presentationRow = (last) => ({ command: ["eval", "predicate"], success: true, summary: `() => { ... }\n(succeeded)${last === undefined ? "" : `\n${last}`}` });
+const page = [{ command: ["get", "url"], success: true, summary: "https://example.com/" }];
+
+const passReport = analyzeDebugPresetResults([...page, presentationRow("true")], compiled.checks ?? compiled).report;
+assert.equal(passReport.expectedTextMissing, false, "a PRESENTATION row reporting true must not be called missing");
+assert.doesNotMatch(String(passReport.summary), /not found/,
+    "the live shape that produced a false 'not found' must now read as a pass");
+
+const failReport = analyzeDebugPresetResults([...page, presentationRow("false")], compiled.checks ?? compiled).report;
+assert.equal(failReport.expectedTextMissing, true, "a PRESENTATION row reporting false must be called missing");
+
+// An unreadable verdict is neither a pass nor a failure, and must never be summarised as clean.
+// This is the state that let the original bug hide: a verdict that was never read looked identical
+// to a verdict that passed.
+const unknownReport = analyzeDebugPresetResults([...page, presentationRow(undefined)], compiled.checks ?? compiled).report;
+assert.equal(unknownReport.expectedTextMissing, false, "an unreadable verdict must not be reported as a failure");
+assert.match(String(unknownReport.summary), /could not be read/i, "an unreadable verdict must be named in the summary");
+assert.doesNotMatch(String(unknownReport.summary), /no failures detected/,
+    "a report with an unreadable verdict must never claim the page is clean");
+assert.equal(unknownReport.unverifiableChecks?.length, 1, "the unreadable verdict must be counted and reported");
+
+// Both selector and text assertions use the same reader, so both must be covered.
+const selectorCompiled = compileAgentBrowserDebug({ action: "actionable", expectedSelector: "#nope", session: "u1" }).compiled;
+const selFail = analyzeDebugPresetResults([...page, presentationRow("false")], selectorCompiled.checks ?? selectorCompiled).report;
+assert.equal(selFail.expectedSelectorMissing, true, "expectedSelector must use the same reader");
+const selUnknown = analyzeDebugPresetResults([...page, presentationRow(undefined)], selectorCompiled.checks ?? selectorCompiled).report;
+assert.match(String(selUnknown.summary), /could not be read/i, "an unreadable selector verdict must be named too");
+
+console.log("wave22-debug-verdict: all assertions passed (verdicts survive on process AND presentation rows, unreadable verdicts are named instead of silently passing, call site pinned)");

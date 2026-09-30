@@ -303,6 +303,44 @@ function getExpectedEvalRoles(input) {
     return roles;
 }
 
+/**
+ * Read an eval row's boolean verdict, or `undefined` when it cannot be determined.
+ *
+ * wave22: this read `item.result === true`, but the analyzer is handed PRESENTATION rows, and a
+ * successful step's `details` has no `result` key at all — it carries `data`, `text`, `summary` and
+ * `success`. So the read was undefined on every row and `passed` was false for every assertion,
+ * always. Proved live: a page that demonstrably contains the requested text returned `true` from
+ * the eval row and the report still said "expected text not found". A sibling fix in this wave had
+ * already turned a "silently clean" report into this "always failing" one — both lies, and the
+ * second is worse because it looks like the tool is broken rather than lying.
+ *
+ * The third return value matters as much as the first two: `undefined` means the verdict was not
+ * readable, which is neither a pass nor a failure. Reporting an unreadable verdict as a failure
+ * trains the caller to ignore it, and reporting it as a pass is the original bug.
+ */
+function readEvalVerdict(item) {
+    if (typeof item === "boolean")
+        return item;
+    if (item.result === true || item.result === false)
+        return item.result;
+    if (isRecord(item.result) && typeof item.result.result === "boolean")
+        return item.result.result;
+    for (const value of [item.data, isRecord(item.data) ? item.data.result : undefined]) {
+        if (typeof value === "boolean")
+            return value;
+    }
+    // The presentation renders the eval's return value as the last line of the step text, which is
+    // the only place it survives for a presentation row.
+    for (const value of [item.text, item.summary]) {
+        if (typeof value !== "string")
+            continue;
+        const lines = value.trim().split(/\r?\n/);
+        const last = lines[lines.length - 1]?.trim().toLowerCase();
+        if (last === "true" || last === "false")
+            return last === "true";
+    }
+    return undefined;
+}
 function extractRowString(item) {
     const result = item.result;
     if (typeof result === "string")
@@ -406,6 +444,7 @@ export function analyzeDebugPresetResults(rows, input) {
         : DEBUG_LIMITS.maxFailures;
     const failureChecks = [];
     const warnings = [];
+    const unverifiableChecks = [];
     const consoleErrors = [];
     const pageErrors = [];
     const failedRequests = [];
@@ -429,17 +468,22 @@ export function analyzeDebugPresetResults(rows, input) {
             continue;
         }
         const result = isRecord(item.result) ? item.result : undefined;
-        if (evalRole === "debug.expectedText") {
-            expectedTextChecked += 1;
-            const passed = item.result === true || result?.result === true;
-            if (!passed)
-                expectedTextMissing = true;
-            continue;
-        }
-        if (evalRole === "debug.expectedSelector") {
-            const passed = item.result === true || result?.result === true;
-            if (!passed)
-                expectedSelectorMissing = true;
+        if (evalRole === "debug.expectedText" || evalRole === "debug.expectedSelector") {
+            const verdict = readEvalVerdict(item);
+            const isText = evalRole === "debug.expectedText";
+            if (isText)
+                expectedTextChecked += 1;
+            if (verdict === undefined) {
+                // Never silently resolve an unreadable verdict in either direction.
+                unverifiableChecks.push(`${isText ? "expectedText" : "expectedSelector"} verdict could not be read from the batch row`);
+                continue;
+            }
+            if (!verdict) {
+                if (isText)
+                    expectedTextMissing = true;
+                else
+                    expectedSelectorMissing = true;
+            }
             continue;
         }
         if (evalRole === "debug.evalExpression") {
@@ -529,6 +573,29 @@ export function analyzeDebugPresetResults(rows, input) {
     };
     const summaryParts = [`${counts.consoleErrors} console error(s)`, `${counts.pageErrors} page error(s)`, `${counts.actionableFailedRequests} actionable failed request(s)`];
     const pageLabel = url ? ` on ${truncateText(url, DEBUG_LIMITS.urlChars)}` : "";
+    // An unreadable verdict is a reportable outcome in its own right, never folded into "no
+    // failures". A summary that says the page is clean while an assertion's verdict was lost is the
+    // exact lie this whole chain of fixes has been removing.
+    if (unverifiableChecks.length > 0) {
+        const summary = `Debug report: ${unverifiableChecks.length} assertion verdict(s) could not be read from the batch result, so the page is NOT cleared.`;
+        return {
+            failedChecks: uniqueFailures,
+            report: {
+                consoleErrors: boundedConsoleErrors,
+                counts,
+                evalResult,
+                expectedSelectorMissing,
+                expectedTextMissing,
+                failedRequests,
+                pageErrors: boundedPageErrors,
+                summary,
+                title,
+                unverifiableChecks,
+                url,
+            },
+            warnings: uniqueWarnings,
+        };
+    }
     if (uniqueFailures.length === 0) {
         const summary = items.length === 0
             ? "Debug report: no batch steps were returned, so nothing was inspected."
