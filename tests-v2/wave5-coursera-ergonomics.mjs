@@ -30,9 +30,18 @@ const timeoutBatch = input({ args: ["batch"], stdin: JSON.stringify([["wait", "-
 assert.equal(timeoutBatch.status, "invalid", "wait --timeout as a batch step is rejected");
 assert.match(timeoutBatch.validationError ?? "", /Blocked batch step 1/, "rejection points at step 1");
 
-// 5. POSITIVE CONTROL: positional duration still valid (the live-proven form)
-const positional = input({ args: ["batch"], stdin: JSON.stringify([["wait", "2000"], ["get", "url"]]) });
-assert.notEqual(positional.status, "invalid", "positional wait 2000 stays valid");
+// CONTRACT CHANGE (wave22, requested): caller-supplied `batch` is retired on this build. The host
+// reshapes the `stdin` tool parameter into an array of string arrays specifically for `batch`,
+// before the tool body runs, so batch steps never arrive intact. This positive control can no
+// longer be expressed through the caller path at all, so it is re-stated against the new truth
+// rather than quietly deleted: the same steps are still valid, they now arrive through `eval
+// --stdin`, and the step-specific guards above it are still live for job/qa/debug, which
+// compile to a batch internally with stdin built inside the wrapper.
+// 5. POSITIVE CONTROL: positional duration is still valid (the live-proven form), now through eval
+const positional = input({ args: ["wait", "2000"] });
+assert.notEqual(positional.status, "invalid", "positional wait 2000 stays valid as a top-level command");
+const positionalEval = input({ args: ["eval", "--stdin"], stdin: "(() => { setTimeout(() => {}, 2000); return 1; })()" });
+assert.notEqual(positionalEval.status, "invalid", "the same multi-step shape is valid through eval --stdin");
 
 // 6. POSITIVE CONTROL: condition flag forms stay valid
 const textWait = input({ args: ["wait", "--text", "Login Page"] });

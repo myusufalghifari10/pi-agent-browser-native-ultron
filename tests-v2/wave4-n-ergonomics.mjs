@@ -71,9 +71,19 @@ assert.deepEqual(stepsFromArray.steps, [["click", "@e1"], ["get", "url"]], "P28-
 assert.match(parseBatchStdinJsonArray("click,x").error ?? "", /could not be parsed as JSON/, "garbage string still fails with the parse error");
 assert.match(parseBatchStdinJsonArray({ nope: true }).error ?? "", /must be a JSON array/, "non-array non-string still fails with the shape error");
 
-// full pipeline: batch with array stdin passes argv validation end-to-end
+// CONTRACT CHANGE (wave22, requested): caller-supplied `batch` is retired on this build. The host
+// reshapes the `stdin` tool parameter into an array of string arrays specifically for `batch`,
+// before the tool body runs, so batch steps never arrive intact. This positive control can no
+// longer be expressed through the caller path at all, so it is re-stated against the new truth
+// rather than quietly deleted: the same steps are still valid, they now arrive through `eval
+// --stdin`, and the step-specific guards above it are still live for job/qa/debug, which
+// compile to a batch internally with stdin built inside the wrapper.
+// full pipeline: the same steps still work through the replacement, and the caller batch is refused
+const evalPath = resolveAgentBrowserInput({ getBatchPreflightValidationError: () => undefined, params: { args: ["eval", "--stdin"], stdin: "(() => { document.title; return 1; })()" } });
+assert.notEqual(evalPath.status, "invalid", "eval --stdin is the replacement and must pass the validation chain");
 const batchInput = resolveAgentBrowserInput({ getBatchPreflightValidationError: () => undefined, params: { args: ["batch"], stdin: [["get", "title"], ["snapshot"]] } });
-assert.notEqual(batchInput.status, "invalid", "array-stdin batch passes the validation chain");
+assert.equal(batchInput.status, "invalid", "caller batch is now retired and must be refused");
+assert.match(batchInput.validationError ?? "", /eval --stdin/, "the refusal must name the working replacement");
 
 // --- W-V1: restore batch gets get url (compile) + open target (gate injection) -------------------
 const compiledRows = JSON.parse(JSON.stringify([["state", "load", "/tmp/x.state"], ["get", "url"], ["snapshot"]]));

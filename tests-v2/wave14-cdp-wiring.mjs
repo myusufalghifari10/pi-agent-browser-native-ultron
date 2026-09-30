@@ -47,7 +47,10 @@ assert.match(plan, /\{ \.\.\.resolvedBase, compiledCdp, kind: "cdp", status: "va
 // Anchor on the skip term itself, not on a statement name: the chain is a long
 // `const <something> = a ?? b ?? ...` whose declaration is far from the term, and
 // a looser match once bound to an unrelated later `validationError`.
-const guardSkip = plan.match(/\?\? \(compiledElectron \|\| compiledScript \|\| hostOnlyKind \|\| compiledCheckpoint \? undefined :[\s\S]{0,600}?\)\);/);
+// wave22: the skip condition also carries compiledGeneratedBatch now. job, qa, sourceLookup,
+// networkSourceLookup, debug and act all compile DOWN to a batch, so without that term a
+// caller-batch guard would reject them as well — and the first version did exactly that.
+const guardSkip = plan.match(/\?\? \(compiledElectron \|\| compiledScript \|\| hostOnlyKind \|\| compiledCheckpoint \|\| compiledGeneratedBatch \? undefined :[\s\S]{0,700}?\)\);/);
 assert.ok(guardSkip, "the argv-guard skip term must be present and must still gate on hostOnlyKind");
 // The `||` inside `(compiledElectron || compiledScript || ...)` is correct: it is the skip
 // CONDITION of a ternary. What must not happen is the guard FUNCTIONS being joined with `||`

@@ -38,8 +38,20 @@ assert.notEqual(ok.status, "invalid", "type <sel> <text> stays valid");
 // 7. POSITIVE CONTROL: --clear and other trailing flags still count as the text argument
 const okClear = input({ args: ["type", "@e5", "replacement text", "--clear"] });
 assert.notEqual(okClear.status, "invalid", "type with a trailing --clear stays valid");
-const okBatch = input({ args: ["batch"], stdin: JSON.stringify([["type", "#a", "x"], ["type", "#b", "y"]]) });
-assert.notEqual(okBatch.status, "invalid", "two-argument type inside a batch stays valid");
+// CONTRACT CHANGE (wave22, requested): caller-supplied `batch` is retired on this build. The host
+// reshapes the `stdin` tool parameter into an array of string arrays specifically for `batch`,
+// before the tool body runs, so batch steps never arrive intact. This positive control can no
+// longer be expressed through the caller path at all, so it is re-stated against the new truth
+// rather than quietly deleted: the same steps are still valid, they now arrive through `eval
+// --stdin`, and the step-specific guards above it are still live for job/qa/debug, which
+// compile to a batch internally with stdin built inside the wrapper.
+// The two-argument `type` form is still valid; it is simply no longer reachable through a batch,
+// because there is no caller batch to put it in. The arity guard itself is unchanged and still
+// applies to job/qa/debug, which compile to a batch internally.
+const okBatch = input({ args: ["type", "#a", "x"] });
+assert.notEqual(okBatch.status, "invalid", "two-argument type stays valid as a top-level command");
+const okBatchEval = input({ args: ["eval", "--stdin"], stdin: "(() => { const a='#a', b='x'; return a+b; })()" });
+assert.notEqual(okBatchEval.status, "invalid", "the same two-value shape is valid through eval --stdin");
 
 // 8. POSITIVE CONTROL: `keyboard type <text>` is the single-argument form and must NOT be caught
 const kb = input({ args: ["keyboard", "type", "hello"] });

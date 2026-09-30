@@ -27,7 +27,7 @@
         "dist/extensions/agent-browser/lib/orchestration/input-plan.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "b2fd3ba1f2d912b6f33fb9c4d6e160b62bb17e77bda555f4d7cf1b3e2c50a608"
+        "dist/extensions/agent-browser/lib/orchestration/input-plan.js": "bc6e6d062f7054072f17ef9850658497070d5d3f91d0ee366372ae1e57c24671"
       },
       "upstreamDefect": "state clear <name> ignored the name and deleted every saved state file (P5); diff snapshot without --baseline diffed an empty baseline and always reported changed (P6); state rename cannot be delegated upstream inside batch (P8)."
     },
@@ -304,7 +304,22 @@
       },
       "upstreamDefect": "Wrapper-local diagnostics, not an upstream defect. Proven live on a real 65-question exam: (1) the host comma-joins a nested array stdin param, so a correct [[..],[..]] arrives as an array of strings, and the old error blamed 'step 0 must be a non-empty array' - the shape, never the cause, so the caller could not find the JSON-string fix on its own. (2) batch steps run back-to-back, so a click that navigates followed by a step targeting an element that only exists on the new page reports 'Element not found' and the caller naturally concludes the selector is wrong; the failing step is correct and the missing wait is the bug. The comma is the discriminator for (1) so a hand-built mistake is never blamed on the host, and the page-change check reads the existing command taxonomy rather than a hand-kept list, because a first attempt matching only 'click' missed 'open'.",
       "offlineTest": "tests-v2/wave22-batch-diagnostics.mjs",
-      "verifiedLive": "MIXED, and the final verdict is that batch is UNUSABLE on this host. The one-closer-short form that reached the wrapper last round turned out to be a ONE-OFF: the same call was rejected on every repeat with 'Invalid JSON input: EOF while parsing a list'. The host validates stdin as an array of string arrays before the tool body is entered, so no wrapper repair can run, and it wraps a real array in {item:...} anyway. All three shapes were live-tested repeatedly and each is rejected. The two heals (envelope strip, closer trim/complete) are correct and tested but unreachable here. What IS verified working: the documented workaround of several top-level args calls, proven end to end on a real flow - open Wikipedia, snapshot -i (547 refs), find role searchbox click, keyboard type, keyboard type newline, get url confirming arrival at the Quantum computing article. The wave-15 unknown-subcommand guard also fired correctly during that flow and named the right alternative. COMMAND_REFERENCE.md now states batch is unusable and explicitly tells the reader not to build on the one-off."
+      "verifiedLive": "SCOPE CORRECTED and batch RETIRED AS A CALLER COMMAND 2026-09-30. Removing batch outright would have been wrong: job, checkpoint restore, debug, login-flow and lookups all compile DOWN to a batch, and their stdin is built inside the wrapper in JS rather than passed as a tool parameter, so the host never reshapes it. Checkpoint restore is live-verified working. The host's reshaping is specific to the caller-supplied stdin parameter on the batch command, so only that entry point is refused, naming eval --stdin as the route that works. The first version of the guard took job down with it, because the skip list for compiler-generated args omitted compiledGeneratedBatch while job compiles to exactly the argv being rejected; the regression and both sabotages are now locked in tests-v2/wave22-batch-retired.mjs. Also corrected: an earlier guide said stdin was broken generally, which was wrong - eval --stdin with a plain string is verified working and is the recommended multi-step primitive."
+    },
+    {
+      "id": "P-W22-batch-retired",
+      "patches": [
+        "W22-retire-caller-batch"
+      ],
+      "files": [
+        "tests-v2/wave22-batch-retired.mjs"
+      ],
+      "sha256": {
+        "tests-v2/wave22-batch-retired.mjs": "43e5cbc5f602d7f0a09757dc26e888b99345715e28efb4c5b171681c6772468b"
+      },
+      "upstreamDefect": "Wrapper-local policy, not an upstream defect. The host reshapes the caller-supplied stdin tool parameter for the batch command into an array of string arrays before the tool body runs, so batch steps never arrive intact and no wrapper repair is reachable. batch is therefore refused as a caller command, with eval --stdin named as the replacement. batch is NOT removed: job, checkpoint, debug, login-flow and lookups compile down to it with stdin built in-wrapper, and those work.",
+      "offlineTest": "tests-v2/wave22-batch-retired.mjs",
+      "verifiedLive": "pending restart; the guard is offline-verified and sabotage-verified three ways"
     }
   ]
 }

@@ -305,6 +305,31 @@ function getStateClearBlockError(commandTokens, stdin) {
     }
     return undefined;
 }
+// wave22: `batch` is UNUSABLE when the CALLER supplies the steps, because this host reshapes the
+// tool's `stdin` parameter into an array of string arrays specifically for that command, before the
+// tool body is entered. Every form was live-tested and rejected: a complete JSON string gains a
+// stray "]", the same string one closer short fails with "EOF while parsing a list", and a nested
+// array arrives wrapped as {item:{item:[...]}} and is refused outright. None of that is repairable
+// here, because the failure happens upstream of any wrapper code.
+//
+// So the caller-facing form is refused, with the route that does work named instead. This is
+// deliberately NOT a removal of batch: job, checkpoint restore, debug, login-flow and lookups all
+// compile DOWN to a batch, and their stdin is built inside the wrapper rather than passed as a tool
+// parameter, so the host never reshapes it. Checkpoint restore is live-verified working. Removing
+// batch outright would break five working features; refusing the one broken entry point breaks none.
+function getCallerBatchUnusableError(commandTokens) {
+    // Placed LAST in the guard chain on purpose. The step-specific batch guards (state rename, type
+    // arity, state clear, diff baseline) each name the offending step and are more useful than a blanket
+    // refusal, so they fire first. Placed earlier this guard pre-empted four of them and broke their
+    // tests: a caller running a batch with a bad `type` step must be told about the step, not that
+    // batch is unavailable. The blanket refusal only catches batches that would otherwise proceed.
+    if (!Array.isArray(commandTokens) || commandTokens.length === 0)
+        return undefined;
+    const descriptor = parseArgvDescriptor(commandTokens);
+    if (descriptor.commandInfo.command !== "batch")
+        return undefined;
+    return "agent_browser batch cannot run on this build: the host reshapes the `stdin` tool parameter into an array of string arrays before the tool is entered, so batch steps never arrive intact. Nothing in this wrapper can repair it. Use `eval --stdin` instead - it takes free text that arrives completely untouched, and one expression can perform as many steps as you like: {\"args\":[\"eval\",\"--stdin\"],\"stdin\":\"(() => { ... })()\"}. Or issue several top-level `args` calls.";
+}
 export function resolveAgentBrowserInput(options) {
     const { getBatchPreflightValidationError, params } = options;
     const semanticActionResult = params.semanticAction === undefined ? {} : compileAgentBrowserSemanticAction(params.semanticAction);
@@ -443,7 +468,11 @@ export function resolveAgentBrowserInput(options) {
         // checkpoint is wrapper-orchestrated: its rows are compiler-generated (list never spawns), so
         // caller-argv guards are skipped exactly like the host-only kinds; the mode payload itself is
         // validated by normalizeCheckpointInput above.
-        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? getTypeArityGrammarError(toolArgs, toolStdin) ?? getUnknownFlagError(toolArgs) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
+        // compiledGeneratedBatch covers job, qa, sourceLookup, networkSourceLookup, debug and act —
+        // every one of them compiles DOWN to a batch whose stdin the wrapper builds in JS, so the host
+        // never reshapes it. Without that term the batch refusal below would take job down with it,
+        // which is the exact regression this guard must not cause.
+        ?? (compiledElectron || compiledScript || hostOnlyKind || compiledCheckpoint || compiledGeneratedBatch ? undefined : getStateClearBlockError(toolArgs, toolStdin) ?? getBatchStateRenameError(toolArgs, toolStdin) ?? getDiffSnapshotBaselineError(toolArgs, toolStdin) ?? getTabSelectGrammarError(toolArgs, toolStdin) ?? getWaitFlagGrammarError(toolArgs, toolStdin) ?? getTypeArityGrammarError(toolArgs, toolStdin) ?? getUnknownFlagError(toolArgs) ?? getCallerBatchUnusableError(toolArgs) ?? validateToolArgs(toolArgs) ?? getBatchPreflightValidationError(toolArgs, toolStdin));
     const redactedCompiledJob = redactCompiledJob(compiledJob);
     const redactedCompiledSemanticAction = compiledSemanticAction
         ? { ...compiledSemanticAction, args: redactInvocationArgs(compiledSemanticAction.args) }

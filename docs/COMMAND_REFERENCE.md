@@ -2,39 +2,51 @@
 
 > **Read this before the first `agent_browser` call of a session.**
 >
-> **What works - use this, verified live 2026-09-30:**
+> `stdin` as a plain string works. An earlier version of this file said otherwise and was wrong:
+> only the `batch` path reshapes it. The three forms below are what actually works, in the order you
+> should reach for them.
+>
+> **1. A single command — `args` as a plain array of strings.**
 >
 > ```
 > {"args": ["--session", "ultron1", "open", "https://example.com/"]}
 > {"args": ["--session", "ultron1", "snapshot", "-i"]}
+> {"args": ["--session", "ultron1", "get", "url"]}
 > ```
 >
-> `args` as a plain array of strings is the reliable path for essentially all work. Verified
-> end to end after a Pi restart: `open`, `snapshot -i` and `get url` all return normally.
+> **2. Anything multi-step — `eval --stdin`. This is the good one, and it is not obvious.**
 >
-> **What is broken on this build, so you do not have to rediscover it:**
+> ```
+> {"args": ["--session", "ultron1", "eval", "--stdin"],
+>  "stdin": "(() => { const b = document.querySelector('button'); b.click(); return b.innerText; })()"}
+> ```
 >
-> `batch` is UNUSABLE here. It needs its steps in `stdin`, and this host validates `stdin` as an
-> array of string arrays BEFORE the tool body is entered, so nothing in the wrapper can repair it.
-> Both shapes were live-tested repeatedly, and the host rejects each of them:
+> `stdin` arrives as free text, completely intact, and may be any JavaScript expression. One call can
+> read several things, act, and return structured data — which is how a 65-question assessment was
+> driven end to end, two calls per question instead of five. Verified live: an async IIFE that reads
+> the page, clicks a control, waits for a re-render, and reports the resulting state all in one call.
 >
-> | you send | host delivers | result |
-> |---|---|---|
-> | `stdin` a complete JSON string | the same text plus a stray `]` | `Invalid JSON input: trailing characters at line 1 column 32` |
-> | `stdin` a complete string, one `]` short | passed through once, rejected on every repeat | `Invalid JSON input: EOF while parsing a list` |
-> | `stdin` a nested array | `{item:{item:[{item:["get","url"]}]}}` | rejected, `stdin: must be string` |
+> Use it for: reading a page precisely instead of scraping whole `innerText`, clicking something
+> whose selector keeps changing, waiting for a state change, and anything you would otherwise do as
+> three separate calls.
 >
-> The one-closer-short form reached the wrapper exactly once out of three identical calls, so it is
-> a one-off and not a workaround. Do not build on it. `job` fails for the same reason: a JSON string
-> reached the job validator on one call and arrived mangled on the next, with identical parameters.
+> **3. `batch` only — broken on this build, do not use it.**
 >
-> This is upstream behaviour - parameter stringification `earendil-works/pi#4226`, array-param
-> envelope `hermes-agent#104803` - not something this extension can fix.
+> `batch` needs its steps in `stdin`, and this host reshapes `stdin` into an array of string arrays
+> specifically for that command, before the tool body is entered. Nothing in the wrapper can repair
+> it, and all of these were live-tested and rejected:
 >
-> **So: use two or more top-level `args` calls instead of one batch.** A full search flow was
-> verified this way end to end after a restart: `open` a page, `snapshot -i`, `find role <role>
-> click`, `keyboard type <text>`, `keyboard type "\n"`, then `get url` to confirm where you landed.
-> Always confirm with `get url` or a fresh snapshot; a dispatched action is not a landed one.
+> | you send | result |
+> |---|---|
+> | complete JSON string | `Invalid JSON input: trailing characters at line 1 column 32` |
+> | the same string one `]` short | `Invalid JSON input: EOF while parsing a list` |
+> | a nested array | `{item:{item:[...]}}` wrapped, then rejected: `stdin: must be string` |
+>
+> `job` is unreliable for the same reason. If you need several steps, write one `eval --stdin`
+> expression that performs them, or make several `args` calls.
+>
+> Every parse failure quotes the value that actually arrived, so read it before changing your call
+> shape. Five fixes in this area were wrong guesses about the host; the quoting is what ended that.
 >
 Related docs:
 - [`../README.md`](../README.md)
