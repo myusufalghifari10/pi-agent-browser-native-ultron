@@ -237,36 +237,65 @@ const JOB_STEP_COMPILERS = {
     wait: compileWaitJobStep,
     waitForDownload: (step) => compilePathArtifactJobStep(step, "waitForDownload"),
 };
+/** The host's array-parameter envelope: an object whose ONLY key is `item`. */
+function isItemEnvelope(value) {
+    return value !== null
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && Object.keys(value).length === 1
+        && "item" in value;
+}
 export function compileAgentBrowserJob(input) {
     if (!isRecord(input)) {
         return { error: "job must be an object." };
     }
-    const rawFailFast = input.failFast;
+    // wave22: this host wraps a NESTED array parameter in an {item: ...} envelope, so a job whose
+    // `steps` is an array of arrays arrives as {item: [...]} and every step reads as a bare string
+    // rather than an object. That is the same host behaviour that makes caller-supplied `batch`
+    // unusable, reaching it through the job object instead; it is a documented runner bug
+    // (hermes-agent#104803) and this Pi build stringifies parameters at the same time
+    // (earendil-works/pi#4226).
+    //
+    // Unwrapping is safe by construction: a job step is ALWAYS an object carrying an `action`, so
+    // {item: ...} can never be a legitimate step, and the strip is a no-op on any job that already
+    // worked. It is recursive because the host wraps array elements at every depth, and it is
+    // applied BEFORE the shape checks so those still see the real structure.
+    const unwrappedInput = isItemEnvelope(input) ? input.item : input;
+    if (!isRecord(unwrappedInput)) {
+        return { error: "job must be an object." };
+    }
+    const rawFailFast = unwrappedInput.failFast;
     if (rawFailFast !== undefined && typeof rawFailFast !== "boolean") {
         return { error: "job.failFast must be a boolean when provided." };
     }
     const failFast = rawFailFast !== false;
-    const session = normalizeOptionalJobSession(input, "job.session");
+    const session = normalizeOptionalJobSession(unwrappedInput, "job.session");
     if (session.error) {
         return { error: session.error };
     }
-    const rawSteps = input.steps;
+    const rawStepsEnvelope = unwrappedInput.steps;
+    if (!isItemEnvelope(rawStepsEnvelope) && (!Array.isArray(rawStepsEnvelope) || rawStepsEnvelope.length === 0)) {
+        return { error: "job.steps must be a non-empty array." };
+    }
+    // The envelope can sit on the job itself or on `steps`; the host has been seen to use both.
+    const rawSteps = isItemEnvelope(rawStepsEnvelope) ? rawStepsEnvelope.item : rawStepsEnvelope;
     if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
         return { error: "job.steps must be a non-empty array." };
     }
     const steps = [];
     for (const [index, rawStep] of rawSteps.entries()) {
-        if (!isRecord(rawStep)) {
+        const stepInput = isItemEnvelope(rawStep) ? rawStep.item : rawStep;
+        if (!isRecord(stepInput)) {
             return { error: `job.steps[${index}] must be an object.` };
         }
-        const action = rawStep.action;
+        const action = stepInput.action;
         if (typeof action !== "string" || !AGENT_BROWSER_JOB_STEP_ACTIONS.includes(action)) {
             return { error: `job.steps[${index}].action must be one of: ${AGENT_BROWSER_JOB_STEP_ACTIONS.join(", ")}.` };
         }
         const jobAction = action;
         const compile = JOB_STEP_COMPILERS[jobAction];
         // `probe` is valid on every step, so it joins the allowed fields at the check site.
-        const unsupportedFieldError = getUnsupportedJobStepFieldError(rawStep, jobAction, new Set([...JOB_STEP_ALLOWED_FIELDS[jobAction], "probe"]));
+        const unsupportedFieldError = getUnsupportedJobStepFieldError(stepInput, jobAction, new Set([...JOB_STEP_ALLOWED_FIELDS[jobAction], "probe"]));
         if (unsupportedFieldError)
             return { error: `job.steps[${index}]: ${unsupportedFieldError}` };
         const probeSteps = compileJobStepProbeRows(rawStep, jobAction, index);

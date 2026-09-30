@@ -320,6 +320,23 @@
       "upstreamDefect": "Wrapper-local policy, not an upstream defect. The host reshapes the caller-supplied stdin tool parameter for the batch command into an array of string arrays before the tool body runs, so batch steps never arrive intact and no wrapper repair is reachable. batch is therefore refused as a caller command, with eval --stdin named as the replacement. batch is NOT removed: job, checkpoint, debug, login-flow and lookups compile down to it with stdin built in-wrapper, and those work.",
       "offlineTest": "tests-v2/wave22-batch-retired.mjs",
       "verifiedLive": "pending restart; the guard is offline-verified and sabotage-verified three ways"
+    },
+    {
+      "id": "P-W22-job-envelope",
+      "patches": [
+        "W22-job-item-envelope"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/job.js",
+        "tests-v2/wave22-job-envelope.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "23f8dfd61481345b6b5a503ce94aca67a87b674800a214be5462f1d54b9ae073",
+        "tests-v2/wave22-job-envelope.mjs": "9dd0f69c720eeb1cb0e40e72b9b807d28333a6b2d3d054859463fdc59c80cbd4"
+      },
+      "upstreamDefect": "Upstream host bug, repaired locally. This Pi build stringifies every tool parameter (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: ...} (hermes-agent#104803), so a job whose `steps` is an array of objects arrives wrapped and each step reads as a bare string, producing the misleading 'job.steps must be a non-empty array' for a payload that is correct. Same host class as the caller-batch breakage, reaching the tool through the job object instead. A job step is always an object carrying an `action`, so {item: ...} can never be a legitimate step and the strip is a no-op on any job that already worked.",
+      "offlineTest": "tests-v2/wave22-job-envelope.mjs",
+      "verifiedLive": "pending restart; offline-verified and sabotage-verified, compiled argv proven byte-identical to the pre-patch form"
     }
   ]
 }
