@@ -1379,7 +1379,20 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
     // invalid JSON Schema 6.4.1, which is what left the runner's reconstruction undefined; every
     // mangling this host is known to produce is healed in the parser — the {item: ...} strip and
     // the trailing-closer trim — so accepting both forms is now safe rather than merely hopeful.
+    // FINAL, from the last live round. The two parameters must be declared DIFFERENTLY, because
+    // this harness sends them in different shapes and declaring one shape for both breaks the other.
+    // Observed in the same call, verbatim from the host's own validation error:
+    //     args  as an array  ->  { "item": ["--session","ultron1","batch","--bail"] }
+    //     stdin as a string ->  "[[\"get\",\"url\"],[\"get\",\"title\"]]"     (intact)
+    // Declaring args string-only made every call fail "args: must be string". Declaring stdin as an
+    // array instead made the host reject that perfectly good string with "trailing characters at
+    // line 1 column 32" — the same reconstruction, reached from the other side. So:
+    //   args  -> string OR array: this harness can only emit the array form for args
+    //   stdin -> string:        the harness emits a string for stdin and it survives unchanged
+    // The parser still accepts a real array for stdin, so a host that sends one is served; this
+    // only stops declaring a shape the host then mangles.
     const STR_OR_ARR = { type: ["string", "array"], items: { type: "string" } };
+    const STR_FOR_STDIN = { type: "string" };
     // Bare type pair, used only where a description follows in the spread below.
     const STR_OR_OBJ = { type: ["string", "object"] };
     const agentBrowserParamDocs = {
@@ -1388,8 +1401,8 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
             description: 'Raw argv tokens, e.g. ["get","url"] or ["click","@e3"]. Either form works: an array, which this host may deliver wrapped as {item:[...]}, or a JSON string. The wrapper unwraps both.',
         },
         stdin: {
-            ...STR_OR_ARR,
-            description: 'Batch steps as array-of-arrays, e.g. [["get","url"],["snapshot","-i"]], or a string of free text for `eval`/`script`. Either form works: a JSON string {"stdin":"[[\\"get\\",\\"url\\"]]"} arrives intact, an array may arrive wrapped as {item:[...]} or with a trailing "]". The wrapper heals both.',
+            ...STR_FOR_STDIN,
+            description: 'Batch steps as a JSON string, e.g. {"stdin":"[[\\"get\\",\\"url\\"],[\\"snapshot\\",\\"-i\\"]]"}, or free text for `eval`/`script`. Declared string-only ON PURPOSE: this host appends a stray "]" to a string that arrives for an array-declared param. A real array is still accepted by the parser, but do not send one here.',
         },
         script: { type: "string", description: "One-shot JavaScript executed against a throwaway session." },
         timeoutMs: { type: "number", description: "Wall-clock budget for the whole call." },

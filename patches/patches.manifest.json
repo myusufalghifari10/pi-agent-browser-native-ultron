@@ -148,7 +148,7 @@
         "dist/extensions/agent-browser/index.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/index.js": "2578a6c5a609da8f8cdd6a5b1d70690ddaeabdaef98edf16582f12cf616e4eee"
+        "dist/extensions/agent-browser/index.js": "80a5550311d0985a76f649c3476b4d1323f030a644a90b4a65bce0f23e698e42"
       },
       "upstreamDefect": "Providers stringify array/object tool params, so every args-mode call reported 'Provide exactly one input mode' (P28 prepareArguments); prompt-surface slimming (guide-gate companion, Round-2 lineage — current shape maintained in playbook.js, see PATCHES.md).",
       "verifiedLive": "LIVE: wave21 filled the parameter schema. Another agent session read this guide in full and still could not make a single successful call — args died with \"args is not iterable\", job with \"job.steps must be a non-empty array\" while P28 was fine. Cause: every parameter was declared {} so the model was told the parameter exists and nothing else; it guessed args as an array-of-arrays because that is what stdin looks like for batch, then read the guide, concluded the patch was clobbered, and reported a bug that did not exist. Now each parameter carries a type and a description, and every mode-object admits string|object because this host stringifies object params."
@@ -285,11 +285,11 @@
         "tests-v2/wave21-tool-schema.mjs"
       ],
       "sha256": {
-        "tests-v2/wave21-tool-schema.mjs": "027e9bed3f02cc391360cbf080348b5a6f2bbafc991afe163d010599cb4c4d94"
+        "tests-v2/wave21-tool-schema.mjs": "40d668d2beca8cfb1d46faa2fbf74a2f8d703ce1179805b8ecf5deb07d21e6f1"
       },
       "upstreamDefect": "Not an upstream defect - a local usability defect. The slim schema declared every parameter as an empty object, so the model was told a parameter exists with no type, shape or description. Since the model reads the schema before it reads the docs, the docs cannot fix a wrong guess made from the schema: an agent that read all 2,242 lines still failed every call. Fixed by declaring a type and a one-line description per parameter, and by allowing string on every mode-object since this host re-coerces object params to strings. tests-v2/wave21-tool-schema.mjs asserts this against the real tool definition a host receives, not against source text; a source match would pass while the host kept getting {}.",
       "offlineTest": "tests-v2/wave21-tool-schema.mjs",
-      "verifiedLive": "LIVE-VERIFIED, with one wrong turn recorded 2026-09-30. Search found the root cause: this Pi build serialises tool parameters to strings (earendil-works/pi#4226, closed as big-refactor) and its runner wraps ARRAY params in {item:...} (hermes-agent#104803). The host prints received arguments verbatim, which settled the shapes: args-as-array arrives as {item:[...]}, stdin-as-string arrives intact. So declaring args/stdin string-only was ALSO wrong — this harness can only emit the array form for args, and every call then failed with \"args: must be string\", the exact failure the fix was meant to prevent. Final: both forms declared AND items now present, which the previous version omitted against JSON Schema 6.4.1. The {item:...} envelope is stripped in code for BOTH argv and batch stdin, so every mangling the host is known to produce is healed rather than merely documented."
+      "verifiedLive": "LIVE-VERIFIED 2026-09-30; the final shape was found by testing both wrong declarations. This harness sends args as an ARRAY (delivered wrapped in {item:[...]}) and stdin as a STRING (delivered intact), shown verbatim in the host's own validation error. So the two are declared differently: args = string|array WITH items (an array type without items is invalid JSON Schema 6.4.1 and left the runner's reconstruction undefined); stdin = string ONLY, because an array-declared stdin makes the host append a stray ']' to the string and reject it with 'trailing characters at line 1 column 32'. Both wrong declarations were live-tested: string-only args failed every call ('args: must be string'), array stdin failed with the trailing-closer error. The {item:...} envelope is stripped in code for BOTH argv and batch stdin, and the parser still accepts a real array for stdin."
     },
     {
       "id": "P-W22-batch-diagnostics",

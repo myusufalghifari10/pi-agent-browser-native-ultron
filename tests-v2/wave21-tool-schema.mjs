@@ -65,12 +65,23 @@ assert.match(argsDoc, /JSON string/i, "args must say the working form is a JSON 
 // and which is required by JSON Schema 6.4.1 — its absence is what left the runner's reconstruction
 // undefined. Every mangling the host is known to produce is healed in code, so accepting both forms
 // is safe rather than hopeful.
-for (const param of ["args", "stdin"]) {
-    assert.deepEqual(PROPS[param].type, ["string", "array"], `${param} must accept both forms; this harness can only send args as an array`);
-    assert.ok(PROPS[param].items !== undefined, `${param} must declare items; an array type without them is invalid JSON Schema and leaves the runner's reconstruction undefined`);
-    assert.equal(PROPS[param].items.type, "string", `${param} items must be a string, which is what both argv and batch steps contain`);
-    assert.match(PROPS[param].description, /JSON string/i, `${param} must still name the JSON string as a working form`);
-}
+//
+// The two parameters are NOT the same shape and must not share one declaration. The host sends
+// args as an array (which it wraps in {item:...}) and stdin as a string (which survives intact),
+// so:
+//   args  must accept both, WITH items, because that is the form the harness emits here
+//   stdin must be string-only, because an array-declared stdin makes the host append a stray "]" to
+//          the string and then reject it with "trailing characters at line 1 column 32"
+// Both wrong declarations were live-tested: string-only for args failed every call with
+// "args: must be string"; array for stdin failed with the trailing-closer error.
+assert.deepEqual(PROPS.args.type, ["string", "array"], "args must accept an array; this harness can only emit the array form");
+assert.ok(PROPS.args.items !== undefined, "args must declare items; an array type without them is invalid JSON Schema and leaves the runner's reconstruction undefined");
+assert.equal(PROPS.args.items.type, "string", "args items must be a string, which is what argv tokens are");
+
+assert.equal(PROPS.stdin.type, "string", "stdin must be declared string-only; declaring an array makes the host append a stray ] and reject the string");
+assert.equal(PROPS.stdin.items, undefined, "stdin declares no array, so it must carry no items either");
+assert.match(PROPS.stdin.description, /JSON string/i, "stdin must name the JSON string as the form to send");
+assert.match(PROPS.stdin.description, /array is still accepted/i, "stdin must say the parser still accepts a real array, so the tolerance is not a secret");
 assert.deepEqual(parseUserBatchStdin('[["get","url"]]').steps, [["get","url"]], "the documented JSON-string form must parse");
 assert.deepEqual(parseUserBatchStdin([["get", "url"]]).steps, [["get", "url"]], "a host that does pass a real array must still be served");
 assert.match(PROPS.stdin.description, /batch/i, "stdin must be described for batch steps");
