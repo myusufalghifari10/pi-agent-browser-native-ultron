@@ -221,14 +221,30 @@ export function compileAgentBrowserDebug(input) {
         steps.push({ action: "open", args: ["open", normalizedUrl] });
         steps.push({ action: "wait", args: ["wait", "--load", loadState], generatedFrom: "debug.loadState" });
     }
+    // wave22: the `eval` rows are ASSERTIONS, not evidence, and they used to be emitted before the
+    // evidence rows. An `eval` marks the page target unverified for the rest of the batch, so every
+    // console/errors/network/snapshot row after one was refused with "The active page became
+    // unverified" — found live: `debug actionable` with an expectedSelector could not run at all,
+    // while `debug checkConsole` (no eval rows) worked fine. The guard is right and the order was
+    // wrong. Evidence first, assertions last; a caller reading the report then sees the context the
+    // verdict was drawn from before the verdict itself.
+    //
+    // A `get url` row goes in front of every assertion except the first. One eval marks the page
+    // unverified, so a SECOND eval in the same batch is refused — which means `expectedText: ["a",
+    // "b"]` could not run at all. Re-verifying between assertions is exactly what the guard asks for.
+    // The report reads eval rows in plan order via a cursor, so folding the assertions into one eval
+    // would have been cheaper and would have shifted every verdict onto the wrong check.
+    const reverify = () => [{ action: "wait", args: ["get", "url"], generatedFrom: "debug.reverify" }];
+    const assertionSteps = [];
+    const addAssertion = (row) => { assertionSteps.push(...(assertionSteps.length === 0 ? [] : reverify()), row); };
     for (const text of expectedText.entries) {
-        steps.push({ action: "wait", args: ["eval", buildExpectedTextPredicate(text)], generatedFrom: "debug.expectedText" });
+        addAssertion({ action: "wait", args: ["eval", buildExpectedTextPredicate(text)], generatedFrom: "debug.expectedText" });
     }
     if (typeof input.expectedSelector === "string") {
-        steps.push({ action: "wait", args: ["eval", buildExpectedSelectorPredicate(input.expectedSelector)], generatedFrom: "debug.expectedSelector" });
+        addAssertion({ action: "wait", args: ["eval", buildExpectedSelectorPredicate(input.expectedSelector)], generatedFrom: "debug.expectedSelector" });
     }
     if (evalExpression !== undefined) {
-        steps.push({ action: "wait", args: ["eval", buildEvalExpressionSource(evalExpression)], generatedFrom: "debug.evalExpression" });
+        addAssertion({ action: "wait", args: ["eval", buildEvalExpressionSource(evalExpression)], generatedFrom: "debug.evalExpression" });
     }
     if (checkConsole)
         steps.push({ action: "wait", args: ["console"], generatedFrom: "debug.console" });
@@ -248,6 +264,7 @@ export function compileAgentBrowserDebug(input) {
         steps.push({ action: "snapshot", args: ["snapshot", "-i"], generatedFrom: "debug.snapshot" });
     if (screenshotPath !== undefined)
         steps.push({ action: "screenshot", args: ["screenshot", screenshotPath], generatedFrom: "debug.screenshot" });
+    steps.push(...assertionSteps);
     return {
         compiled: {
             args: withOptionalSessionArgs(session, ["batch", "--bail"]),

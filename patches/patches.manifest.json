@@ -358,19 +358,35 @@
     {
       "id": "P-W22-debug-session",
       "patches": [
-        "W22-debug-session-threading"
+        "W22-debug-session-threading",
+        "W22-debug-step-order"
       ],
       "files": [
         "dist/extensions/agent-browser/lib/input-modes/debug.js",
         "tests-v2/wave22-session-threading-audit.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/debug.js": "18942d5667e9e0a800c7ffb8f87b6499bbc248783a64feaf86eb43da3a51c769",
+        "dist/extensions/agent-browser/lib/input-modes/debug.js": "aed126ee385f4c38941bdbdd0905d9cbaab4b5f14c2ee38f58777ffe82e1cf3e",
         "tests-v2/wave22-session-threading-audit.mjs": "6ef43be4b9b655591d09bd50da283ca267bcc8abe74701154868b1615a672c2f"
       },
       "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserDebug never handled `session` at all — the field was absent from the compiler and argv was a bare [\"batch\",\"--bail\"] — so a devtools report requested for a named session ran against the root session. Same class as the sourceLookup defect fixed earlier in this wave. Audited the whole input-modes directory: debug was the only remaining mode that both builds argv and accepts a session without threading it. job, act, networkSourceLookup and login (via the P27 runtime dispatch wrapper) were already correct.",
       "offlineTest": "tests-v2/wave22-session-threading-audit.mjs",
-      "verifiedLive": "BUG FOUND LIVE, fix pending restart. A checkConsole on session ultron1 reported step 1 'get url' = about:blank and step 2 'get title' = empty, while ultron1 was verifiably on the AWS assessment summary page — and the report still concluded 'no failures detected (0 console errors, 0 page errors)'. A devtools report for the wrong tab is worse than no report because it reads as a clean bill of health. The fix uses the same withOptionalSessionArgs helper job and act use; the sessionless argv is asserted unchanged."
+      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30 for the session threading: the exact checkConsole call that reported 'get url = about:blank' and 'get title = empty' now reports the real ultron1 URL and title 'AWS Skill Builder', with 110 console messages instead of 'none'. SECOND defect found while testing that fix: debug emitted its eval rows before its console/errors/network rows, and an eval marks the page unverified for the rest of the batch, so every evidence row after the first was refused — 'debug actionable' with an expectedSelector could not run at all while checkConsole worked, which made it look like a guard problem. The order is now evidence-then-assertions, with a get url re-verify between assertions because a second eval in one batch is refused too (expectedText:[a,b] could not run). The step-order fix is offline-verified and awaits a restart; the session threading is live-verified."
+    },
+    {
+      "id": "P-W22-debug-step-order",
+      "patches": [
+        "W22-debug-step-order"
+      ],
+      "files": [
+        "tests-v2/wave22-debug-step-order.mjs"
+      ],
+      "sha256": {
+        "tests-v2/wave22-debug-step-order.mjs": "83c49354f8eaad83ceb3ef4e3c92e3073f93662d3fd9060ba693b523aa034603"
+      },
+      "upstreamDefect": "Wrapper-local ordering defect against a correct upstream-style guard. The page-target guard treats an eval as an unverified page transition, which is right, but compileAgentBrowserDebug emitted its assertion rows (expectedText / expectedSelector / evalExpression) BEFORE its evidence rows (console, errors, network requests, snapshot), so every evidence row after the first eval was refused. A second eval in the same batch is refused too, so multi-assertion calls could not run at all. Fixed by emitting evidence first and assertions last, with a get url re-verify between assertions. The reverify rows are deliberately not eval rows: the report consumes eval rows through a plan-order cursor, so an extra eval would shift every verdict onto the wrong check.",
+      "offlineTest": "tests-v2/wave22-debug-step-order.mjs",
+      "verifiedLive": "found live, fix offline-verified and sabotage-verified, pending restart for live confirmation"
     }
   ]
 }
