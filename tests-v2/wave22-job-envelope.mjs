@@ -32,6 +32,21 @@ assert.equal(plain.error, undefined, "a plain job must still compile");
 assert.deepEqual(plain.compiled.args, ["--session", "u1", "batch", "--bail"],
     "the compiled argv must be byte-identical to the pre-patch form");
 
+// The strongest guarantee available: an enveloped job and a plain job must produce the SAME steps.
+// If the strip ever changed what a step compiles to, these two would diverge.
+const enveloped = compile({ item: { session: "u1", steps: [{ item: { action: "snapshot" } }, { item: { action: "assertUrl", url: "skillbuilder.aws" } }] } });
+const direct = compile({ session: "u1", steps: [{ action: "snapshot" }, { action: "assertUrl", url: "skillbuilder.aws" }] });
+assert.equal(enveloped.error, undefined, "the two-level envelope must compile");
+assert.deepEqual(enveloped.compiled.stdin, direct.compiled.stdin,
+    "an enveloped job must compile to exactly the steps the plain form produces");
+assert.deepEqual(enveloped.compiled.args, direct.compiled.args,
+    "and to the same argv");
+// The step compilers must receive the UNWRAPPED step. Reading `url` off the envelope object yields
+// an empty string, which surfaced as "assertUrl requires a non-empty url string" for a correct
+// payload — the shape of the field-check bug this assertion now pins shut.
+assert.deepEqual(JSON.parse(enveloped.compiled.stdin), [[ "snapshot", "-i" ], [ "wait", "--url", "skillbuilder.aws" ]],
+    "step fields must be read from the unwrapped step, not from its envelope");
+
 // The repair is for one known host defect, not a licence to accept anything.
 assert.match(ok({ session: "u1" }), /steps must be a non-empty array/, "a job with no steps must still say so");
 assert.match(ok({ session: "u1", steps: [] }), /steps must be a non-empty array/, "an empty steps array must still be refused");

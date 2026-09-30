@@ -331,8 +331,8 @@
         "tests-v2/wave22-job-envelope.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/job.js": "23f8dfd61481345b6b5a503ce94aca67a87b674800a214be5462f1d54b9ae073",
-        "tests-v2/wave22-job-envelope.mjs": "9dd0f69c720eeb1cb0e40e72b9b807d28333a6b2d3d054859463fdc59c80cbd4"
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "e2418af8cc07f52028d6cd93d93938459000a03f57d7282b14edc16ca2f68aac",
+        "tests-v2/wave22-job-envelope.mjs": "3a6e44de36d66f8233132b6ad3312d187d53293dc013cefccdc1a8d1f388dba9"
       },
       "upstreamDefect": "Upstream host bug, repaired locally. This Pi build stringifies every tool parameter (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: ...} (hermes-agent#104803), so a job whose `steps` is an array of objects arrives wrapped and each step reads as a bare string, producing the misleading 'job.steps must be a non-empty array' for a payload that is correct. Same host class as the caller-batch breakage, reaching the tool through the job object instead. A job step is always an object carrying an `action`, so {item: ...} can never be a legitimate step and the strip is a no-op on any job that already worked.",
       "offlineTest": "tests-v2/wave22-job-envelope.mjs",

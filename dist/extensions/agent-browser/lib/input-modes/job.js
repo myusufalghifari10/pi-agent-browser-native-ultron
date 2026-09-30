@@ -298,10 +298,10 @@ export function compileAgentBrowserJob(input) {
         const unsupportedFieldError = getUnsupportedJobStepFieldError(stepInput, jobAction, new Set([...JOB_STEP_ALLOWED_FIELDS[jobAction], "probe"]));
         if (unsupportedFieldError)
             return { error: `job.steps[${index}]: ${unsupportedFieldError}` };
-        const probeSteps = compileJobStepProbeRows(rawStep, jobAction, index);
+        const probeSteps = compileJobStepProbeRows(stepInput, jobAction, index);
         if (probeSteps.error)
             return { error: `job.steps[${index}]: ${probeSteps.error}` };
-        const compiledStep = compile(rawStep, index);
+        const compiledStep = compile(stepInput, index);
         if (compiledStep.error)
             return { error: compiledStep.error.startsWith(`job.steps[${index}]`) ? compiledStep.error : `job.steps[${index}]: ${compiledStep.error}` };
         steps.push({ action: jobAction, args: compiledStep.args, generatedFrom: compiledStep.generatedFrom }, ...(compiledStep.extraSteps ?? []), ...probeSteps.rows);
