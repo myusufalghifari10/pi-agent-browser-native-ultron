@@ -5,7 +5,7 @@
 import { isRecord } from "../parsing.js";
 import { summarizeNetworkFailures } from "../results/network.js";
 import { withOptionalSessionArgs } from "../results/next-actions.js";
-import { getBatchResultItems, getCommandNameFromBatchItem } from "./shared.js";
+import { getBatchResultItems, getCommandNameFromBatchItem, unwrapItemEnvelope } from "./shared.js";
 import { AGENT_BROWSER_QA_LOAD_STATES } from "./types.js";
 
 export const DEBUG_LOAD_STATES = [...AGENT_BROWSER_QA_LOAD_STATES];
@@ -49,11 +49,20 @@ function getNonEmptyStringError(input, field, label) {
 }
 
 function getExpectedTextEntries(input) {
-    const raw = input.expectedText;
+    // The host wraps a caller-supplied array parameter in {item: [...]}, so a correct
+    // expectedText array arrives as an object and used to be refused with "must be a non-empty
+    // string or array of non-empty strings" — a message that describes the caller's payload as
+    // wrong when the payload was exactly right. Proved live: the single-string form worked and the
+    // two-string array form did not, which is the host and not the caller.
+    const raw = unwrapItemEnvelope(input.expectedText);
     if (raw === undefined)
         return { entries: [] };
     const entries = typeof raw === "string" ? [raw] : Array.isArray(raw) ? raw : undefined;
-    if (!entries || entries.some((text) => typeof text !== "string" || text.trim().length === 0)) {
+    // entries.length === 0 is a real hole, not a nit. An empty array passed every check and produced
+    // a debug report that asserted nothing while looking exactly like a report whose assertions all
+    // passed. A caller who builds the list dynamically and gets an empty one is told the page is
+    // clean, which is the precise failure mode this whole wave has been removing.
+    if (!entries || entries.length === 0 || entries.some((text) => typeof text !== "string" || text.trim().length === 0)) {
         return { error: "debug.expectedText must be a non-empty string or array of non-empty strings when provided." };
     }
     return { entries };

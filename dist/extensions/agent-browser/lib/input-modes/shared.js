@@ -35,3 +35,28 @@ export function validateLookupMaxWorkspaceFiles(value, fieldName) {
     }
     return { value };
 }
+
+// The host's array-parameter envelope. Upstream: this Pi build serialises every tool parameter to a
+// string (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in an object whose
+// only key is `item` (hermes-agent#104803), so a caller-supplied array arrives as {item: [...]}.
+//
+// It is defined ONCE here because five separate call sites hit it, and they were each being fixed
+// individually: batch stdin (retired), job.steps, debug.expectedText, cdp.commands, and the
+// electron string-array fields. Each of those looked like an unrelated bug and was not.
+//
+// Unwrapping is positional on purpose and never recursive. A blanket deep strip would corrupt
+// cdp.commands[].params, which is free-form JSON handed straight to the browser, where a
+// legitimate CDP parameter really can be named `item`. So each call site unwraps the positions its
+// own schema declares as arrays, and nothing descends into pass-through payloads.
+export function isItemEnvelope(value) {
+    return value !== null
+        && typeof value === "object"
+        && !Array.isArray(value)
+        && Object.keys(value).length === 1
+        && "item" in value;
+}
+
+/** Unwrap the envelope one level. Returns the value unchanged when it is not an envelope. */
+export function unwrapItemEnvelope(value) {
+    return isItemEnvelope(value) ? value.item : value;
+}

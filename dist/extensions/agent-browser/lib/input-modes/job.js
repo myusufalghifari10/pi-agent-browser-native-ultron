@@ -1,7 +1,7 @@
 import { isRecord } from "../parsing.js";
 import { withOptionalSessionArgs } from "../results/next-actions.js";
 import { summarizeNetworkFailures } from "../results/network.js";
-import { getBatchResultItems, getCommandNameFromBatchItem, getSelectValues } from "./shared.js";
+import { getBatchResultItems, getCommandNameFromBatchItem, getSelectValues, isItemEnvelope } from "./shared.js";
 import { compileAgentBrowserSemanticAction } from "./semantic-action.js";
 import { AGENT_BROWSER_JOB_STEP_ACTIONS, AGENT_BROWSER_JOB_TYPE_DELAYED_TEXT_MAX_CHARACTERS, AGENT_BROWSER_QA_LOAD_STATES, } from "./types.js";
 // wave9 (open loop W-O1): an optional `session` on job/qa makes the compiled batch run on a
@@ -237,14 +237,8 @@ const JOB_STEP_COMPILERS = {
     wait: compileWaitJobStep,
     waitForDownload: (step) => compilePathArtifactJobStep(step, "waitForDownload"),
 };
-/** The host's array-parameter envelope: an object whose ONLY key is `item`. */
-function isItemEnvelope(value) {
-    return value !== null
-        && typeof value === "object"
-        && !Array.isArray(value)
-        && Object.keys(value).length === 1
-        && "item" in value;
-}
+// isItemEnvelope now lives in shared.js: five call sites hit the same host defect and each was
+// being fixed separately. Importing the single definition keeps them from drifting apart.
 export function compileAgentBrowserJob(input) {
     if (!isRecord(input)) {
         return { error: "job must be an object." };

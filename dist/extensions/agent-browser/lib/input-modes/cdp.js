@@ -15,6 +15,10 @@
 // capped, and heavy payloads are pushed to files (artifact/artifactPath) rather than into the model's
 // context. Validation failures are returned as `{ error }` — never thrown — so the caller can turn
 // them into a normal validation-error result.
+// The host wraps caller-supplied array parameters in {item: [...]}; the single definition lives in
+// shared.js because five call sites hit the same defect and each was being fixed separately.
+import { unwrapItemEnvelope } from "./shared.js";
+
 export const CDP_MAX_COMMANDS = 32;
 export const CDP_MAX_SESSION_CHARS = 64;
 export const CDP_MAX_TIMEOUT_MS = 120000;
@@ -189,7 +193,14 @@ export function normalizeCdpInput(input, { sessionMode } = {}) {
     if (session.value !== undefined && sessionMode === "fresh") {
         return { error: "cdp.session cannot be combined with sessionMode \"fresh\": --session names the session and fresh would be ignored. Drop cdp.session to use a fresh managed session, or keep the session and drop sessionMode." };
     }
-    const commands = validateCommands(input.commands);
+    // Proved live: cdp.commands as a real array is rejected by the host with a misleading "args must
+    // contain at least one agent-browser command token", while the identical payload sent as a JSON
+    // string runs and returns a result. Unwrapped here, at the validator, because that is the seam
+    // input-plan actually goes through — compileAgentBrowserCdp does no validation of its own and
+    // copies whatever it is handed, so unwrapping in the compiler would be after the point where it
+    // mattered. Positional, not recursive: cdp.commands[].params is free-form JSON handed to the
+    // browser and must never be touched, because a real CDP parameter can be named "item".
+    const commands = validateCommands(unwrapItemEnvelope(input.commands));
     if (commands.error) {
         return commands;
     }

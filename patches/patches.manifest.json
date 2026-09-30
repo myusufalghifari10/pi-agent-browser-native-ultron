@@ -207,7 +207,7 @@
         "dist/extensions/agent-browser/lib/input-modes/cdp.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "f42a082cc82280d1d1c256c1f07cf18a6b25cc929626164204f9a44527001659"
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "e6678445e5a312618befdc9dce2d94f9e94fe08a963bf8913c7032d756ff0a9a"
       },
       "upstreamDefect": "Nothing: this file is new and local. The upstream agent-browser CLI exposes no raw CDP surface, and its command list belongs to a third-party binary the wrapper cannot extend. Yusuf's requirement was an agent able to drive the browser freely, so the wrapper needed a channel past the CLI's command vocabulary.",
       "localFix": "The cdp input mode: normalise + compile a { session?, commands[{method,params?,artifact?}], artifactPath?, timeoutMs } payload with 8 validation rules, no I/O. Wired as a host-only kind so the wrapper's argv guards are skipped, matching vault/login/devServer.",
@@ -331,12 +331,12 @@
         "tests-v2/wave22-job-envelope.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/job.js": "e2418af8cc07f52028d6cd93d93938459000a03f57d7282b14edc16ca2f68aac",
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "0c8fa00757b8017f7803b8f7143c15ce81048c2aafa3b38ef906f3e0233d028f",
         "tests-v2/wave22-job-envelope.mjs": "3a6e44de36d66f8233132b6ad3312d187d53293dc013cefccdc1a8d1f388dba9"
       },
       "upstreamDefect": "Upstream host bug, repaired locally. This Pi build stringifies every tool parameter (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: ...} (hermes-agent#104803), so a job whose `steps` is an array of objects arrives wrapped and each step reads as a bare string, producing the misleading 'job.steps must be a non-empty array' for a payload that is correct. Same host class as the caller-batch breakage, reaching the tool through the job object instead. A job step is always an object carrying an `action`, so {item: ...} can never be a legitimate step and the strip is a no-op on any job that already worked.",
       "offlineTest": "tests-v2/wave22-job-envelope.mjs",
-      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30. The exact job that failed with 'job.steps must be a non-empty array' now runs both steps to completion against a real page: step 1 snapshot -i returned 1628 refs, step 2 wait --url skillbuilder.aws resolved. This also proves job's internal batch runs, which is the half of the earlier reasoning that was wrong: the host mangles only what crosses the stdin tool-parameter boundary, and job builds that stdin in wrapper JS (input-plan.js:413 takes compiledJob.stdin, never params.stdin, and a guard refuses a caller-supplied stdin alongside job). The guide's earlier claim that job failed for the same reason as batch is falsified and has been corrected. Offline: 29/29, 25 ledgered files matching."
+      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30. The exact job that failed with 'job.steps must be a non-empty array' now runs both steps to completion against a real page: step 1 snapshot -i returned 1628 refs, step 2 wait --url skillbuilder.aws resolved. This also proves job's internal batch runs, which is the half of the earlier reasoning that was wrong: the host mangles only what crosses the stdin tool-parameter boundary, and job builds that stdin in wrapper JS (input-plan.js:413 takes compiledJob.stdin, never params.stdin, and a guard refuses a caller-supplied stdin alongside job). The guide's earlier claim that job failed for the same reason as batch is falsified and has been corrected. Offline: 29/29, 25 ledgered files matching. | wave23: the predicate moved to shared.js because five call sites hit this same host defect, and job.js's local copy is gone; the test asserts no mode re-declares it."
     },
     {
       "id": "P-W22-source-lookup-session",
@@ -366,7 +366,7 @@
         "tests-v2/wave22-session-threading-audit.mjs"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/input-modes/debug.js": "a8d7c9637ce19402f498138a23e1a4fe058672bd33c201fb85e2756e4065e06d",
+        "dist/extensions/agent-browser/lib/input-modes/debug.js": "73f5e5cfb808f446f1fb0b7b638b56794e0fc47dae46415173cbca576dfd50bb",
         "tests-v2/wave22-session-threading-audit.mjs": "6ef43be4b9b655591d09bd50da283ca267bcc8abe74701154868b1615a672c2f"
       },
       "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserDebug never handled `session` at all — the field was absent from the compiler and argv was a bare [\"batch\",\"--bail\"] — so a devtools report requested for a named session ran against the root session. Same class as the sourceLookup defect fixed earlier in this wave. Audited the whole input-modes directory: debug was the only remaining mode that both builds argv and accepts a session without threading it. job, act, networkSourceLookup and login (via the P27 runtime dispatch wrapper) were already correct.",
@@ -405,6 +405,29 @@
       "upstreamDefect": "Wrapper-local defect against a correct analyzer. analyzeDebugPresetResults expects the CHECKS half of a compiled debug, but process-output.js passed the whole compiled object. The analyzer reads input.expectedText / expectedSelector / evalExpression directly and those live one level down under `.checks`, so getExpectedEvalRoles returned an empty list and no eval row was ever assigned a role. One call site, one property access.",
       "offlineTest": "tests-v2/wave22-debug-verdict.mjs",
       "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30, all four directions on a real page. PASS text: page contains 'Halo Dunia', eval row returns true, report says 'no failures detected' with expectedTextChecked 1. FAIL text: 'TIDAK-ADA-INI' -> eval returns false, report says 'expected text not found'. FAIL selector: '#tidak-ada' -> eval returns false, report says 'expected selector not visible'. PASS selector: '#ada-di-halaman' -> eval returns true, report says 'no failures detected'. Two assertions in one call also work, and the reverify row is visible as step 7 letting the second eval run: 8 steps, text passed and selector failed, each reported separately and correctly. Before this chain the same calls said 'no failures detected' for a page missing the text, then 'expected text not found' for a page that demonstrably contained it; both were lies and the intermediate one was mine."
+    },
+    {
+      "id": "P-W23-host-array-envelope",
+      "patches": [
+        "W23-host-array-envelope-single-definition"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/shared.js",
+        "dist/extensions/agent-browser/lib/input-modes/job.js",
+        "dist/extensions/agent-browser/lib/input-modes/debug.js",
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js",
+        "tests-v2/wave23-host-array-envelope.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/shared.js": "72c2de799a9600ef2209662f15afcc13b7cf11f978196fed0290e9912820bd51",
+        "dist/extensions/agent-browser/lib/input-modes/job.js": "0c8fa00757b8017f7803b8f7143c15ce81048c2aafa3b38ef906f3e0233d028f",
+        "dist/extensions/agent-browser/lib/input-modes/debug.js": "73f5e5cfb808f446f1fb0b7b638b56794e0fc47dae46415173cbca576dfd50bb",
+        "dist/extensions/agent-browser/lib/input-modes/cdp.js": "e6678445e5a312618befdc9dce2d94f9e94fe08a963bf8913c7032d756ff0a9a",
+        "tests-v2/wave23-host-array-envelope.mjs": "3d563bc1fe5b162ac73b99786c1044767d277d6d77b6eb20d49b26aef26d7001"
+      },
+      "upstreamDefect": "Upstream host defect with five call sites, one shared repair. This Pi build serialises every tool parameter to a string (earendil-works/pi#4226) and its runner wraps a NESTED array parameter in {item: [...]} (hermes-agent#104803). Confirmed live for stdin/batch (retired), job.steps, debug.expectedText and cdp.commands. Each had been treated as an unrelated bug; the shared definition in input-modes/shared.js is what makes the fifth one findable.",
+      "offlineTest": "tests-v2/wave23-host-array-envelope.mjs",
+      "verifiedLive": "PARTIALLY LIVE-VERIFIED. The host behaviour was proved live for debug.expectedText (single-string form worked, two-string array form was refused) and for cdp.commands (real array rejected with 'args must contain at least one agent-browser command token', identical payload as a JSON string ran and returned a result). The repair itself is offline-verified and awaits a restart. Also closed here: debug.expectedText accepted an EMPTY array and produced a report that asserted nothing while looking identical to a report whose assertions all passed. The strip is positional by design — cdp.commands[].params is free-form JSON handed to the browser where a real CDP parameter can be named 'item', and a single-key {item:...} inside it is data, not an envelope. Sabotage-verified against that specifically, after an earlier assertion that looked like it covered it and did not."
     }
   ]
 }
