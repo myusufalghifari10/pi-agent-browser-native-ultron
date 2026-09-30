@@ -2,20 +2,40 @@
 
 > **Read this before the first `agent_browser` call of a session.**
 >
-> This Pi build hands array and object tool parameters over as JSON strings, and rejects a raw
-> array with `args is not iterable` before the tool even starts. So:
+> **What works - use this, verified live 2026-09-30:**
 >
 > ```
-> {"args": "[\"get\",\"url\"]"}                          // argv as a JSON STRING
-> {"job":  "{\"session\":\"ultron1\",\"steps\":[[\"get\",\"url\"]]}"}   // job as a JSON STRING
+> {"args": ["--session", "ultron1", "open", "https://example.com/"]}
+> {"args": ["--session", "ultron1", "snapshot", "-i"]}
 > ```
 >
-> Passing `args` as a real array fails with `args is not iterable`; passing `job` as a real object
-> fails with `job.steps must be a non-empty array` **even when `steps` really is a non-empty array**.
-> Both messages point away from the cause. The tool parameter schema states the correct form too,
-> because the schema is read before this file.
+> `args` as a plain array of strings is the reliable path for essentially all work. Verified
+> end to end after a Pi restart: `open`, `snapshot -i` and `get url` all return normally.
 >
-
+> **What is broken on this build, so you do not have to rediscover it:**
+>
+> `batch` needs its steps in `stdin`, and this host mangles `stdin` before the tool is ever
+> entered. The symptom depends on how the parameter is declared, and both states were
+> live-tested:
+>
+> | you send | host delivers | result |
+> |---|---|---|
+> | `stdin` JSON string, `args` an array | the same text plus a stray `]` | `Invalid JSON input: trailing characters at line 1 column 32` |
+> | `stdin` a nested array | `{item:{item:[{item:["get","url"]}]}}` | rejected, `stdin: must be string` |
+>
+> Both are the host re-shaping a value to match a declared type, and the host's own error
+> prints the received arguments verbatim if you want to see it yourself. This is upstream
+> behaviour - parameter stringification `earendil-works/pi#4226`, array-param envelope
+> `hermes-agent#104803` - not something the wrapper can repair, because the failure happens
+> before the tool body runs.
+>
+> `job` is unreliable for the same reason: a JSON string reached the job validator on one call
+> and arrived mangled on the next, with identical parameters.
+>
+> **So prefer two top-level `args` calls over one batch.** Every batch failure message quotes
+> the value that actually arrived, so read it before changing your call shape - the wrapper's
+> own guesses about this host were wrong five times in a row.
+>
 
 Related docs:
 - [`../README.md`](../README.md)
