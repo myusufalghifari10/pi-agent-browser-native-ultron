@@ -319,7 +319,7 @@
       },
       "upstreamDefect": "Wrapper-local policy, not an upstream defect. The host reshapes the caller-supplied stdin tool parameter for the batch command into an array of string arrays before the tool body runs, so batch steps never arrive intact and no wrapper repair is reachable. batch is therefore refused as a caller command, with eval --stdin named as the replacement. batch is NOT removed: job, checkpoint, debug, login-flow and lookups compile down to it with stdin built in-wrapper, and those work.",
       "offlineTest": "tests-v2/wave22-batch-retired.mjs",
-      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30: a caller batch with two steps is now refused with the message naming eval --stdin, instead of the host's cryptic 'trailing characters at line 1 column 32'. the guard is offline-verified and sabotage-verified three ways"
+      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30: a caller batch with two steps is now refused with the message naming eval --stdin, instead of the host's cryptic 'trailing characters at line 1 column 32'. the guard is offline-verified and sabotage-verified three ways Confirmed the retirement harms nothing downstream: checkpoint save+restore ran a full 4-step batch (state load, open <origin>, get url, snapshot) with every step succeeding, which is the W19 open-origin fix working end to end."
     },
     {
       "id": "P-W22-job-envelope",
@@ -353,7 +353,24 @@
       },
       "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserSourceLookup accepted a `session` field, never read it, and never validated it: the compiled argv was a bare [\"batch\"] with no --session, so a lookup naming a session silently ran against the root session instead. networkSourceLookup in the same file already threaded session correctly, so the two had drifted apart.",
       "offlineTest": "tests-v2/wave22-source-lookup-session.mjs",
-      "verifiedLive": "BUG FOUND LIVE, fix pending restart. A sourceLookup naming session ultron1 reported 'Element not found' for an element confirmed present in that session via eval, and the next-action it offered named the ROOT session — the named session was never used. The fix threads and validates session like the sibling mode; the sessionless argv [\"batch\"] is asserted unchanged so existing callers do not shift."
+      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30. Before the fix, sourceLookup on session ultron1 reported 'Element not found' on both steps while its next-action named the ROOT session. After the fix, the same call returns step 1 succeeded (origin = the ultron1 AWS summary page) and step 2 succeeded returning the banner text that exists only in that session. The session mismatch was the whole bug."
+    },
+    {
+      "id": "P-W22-debug-session",
+      "patches": [
+        "W22-debug-session-threading"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/input-modes/debug.js",
+        "tests-v2/wave22-session-threading-audit.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/input-modes/debug.js": "18942d5667e9e0a800c7ffb8f87b6499bbc248783a64feaf86eb43da3a51c769",
+        "tests-v2/wave22-session-threading-audit.mjs": "6ef43be4b9b655591d09bd50da283ca267bcc8abe74701154868b1615a672c2f"
+      },
+      "upstreamDefect": "Wrapper-local defect, not an upstream one. compileAgentBrowserDebug never handled `session` at all — the field was absent from the compiler and argv was a bare [\"batch\",\"--bail\"] — so a devtools report requested for a named session ran against the root session. Same class as the sourceLookup defect fixed earlier in this wave. Audited the whole input-modes directory: debug was the only remaining mode that both builds argv and accepts a session without threading it. job, act, networkSourceLookup and login (via the P27 runtime dispatch wrapper) were already correct.",
+      "offlineTest": "tests-v2/wave22-session-threading-audit.mjs",
+      "verifiedLive": "BUG FOUND LIVE, fix pending restart. A checkConsole on session ultron1 reported step 1 'get url' = about:blank and step 2 'get title' = empty, while ultron1 was verifiably on the AWS assessment summary page — and the report still concluded 'no failures detected (0 console errors, 0 page errors)'. A devtools report for the wrong tab is worse than no report because it reads as a clean bill of health. The fix uses the same withOptionalSessionArgs helper job and act use; the sessionless argv is asserted unchanged."
     }
   ]
 }

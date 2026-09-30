@@ -4,6 +4,7 @@
 // in a single tool call instead of four.
 import { isRecord } from "../parsing.js";
 import { summarizeNetworkFailures } from "../results/network.js";
+import { withOptionalSessionArgs } from "../results/next-actions.js";
 import { getBatchResultItems, getCommandNameFromBatchItem } from "./shared.js";
 import { AGENT_BROWSER_QA_LOAD_STATES } from "./types.js";
 
@@ -153,7 +154,18 @@ export function compileAgentBrowserDebug(input) {
     }
     const url = input.url;
     if (url !== undefined && (typeof url !== "string" || url.trim().length === 0)) {
-        return { error: "debug.url must be a non-empty string when provided." };
+        return { error: "debug.url must be a non-empty string when provided." }
+    }
+    // wave22: `debug` never handled `session` at all — the field was absent from the compiler entirely, so a
+    // report requested for a named session silently ran against the root session. Found live: a checkConsole
+    // on ultron1 reported "about:blank" with an empty title while ultron1 was on a real page, and the report
+    // looked internally consistent, which is what makes it dangerous. A devtools report for the wrong tab is
+    // worse than no report, because it reads as a clean bill of health.
+    // sourceLookup had the identical defect and was fixed earlier in this wave; this mirrors it, and the
+    // argv helper is the same one job and act use.
+    const session = input.session;
+    if (session !== undefined && (typeof session !== "string" || session.trim().length === 0)) {
+        return { error: "debug.session must be a non-empty string when provided." };
     }
     const normalizedUrl = typeof url === "string" ? url.trim() : undefined;
     const expectedText = getExpectedTextEntries(input);
@@ -238,7 +250,7 @@ export function compileAgentBrowserDebug(input) {
         steps.push({ action: "screenshot", args: ["screenshot", screenshotPath], generatedFrom: "debug.screenshot" });
     return {
         compiled: {
-            args: ["batch", "--bail"],
+            args: withOptionalSessionArgs(session, ["batch", "--bail"]),
             checks: {
                 checkConsole,
                 checkErrors,
