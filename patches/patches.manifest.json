@@ -54,7 +54,7 @@
         "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "2a91b9e1bcadd3a63a796a34d2f995685f66726eaaee822b41a7e765e776ffe0"
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "52a0c69f09f9e32c9ebfdef703b1579f7e054f9b7b7c5dc92e411aefe52d421e"
       },
       "upstreamDefect": "set geo <lat> <lon> succeeded but never granted the geolocation permission, so pages always got User denied Geolocation (wrapper stub-install half)."
     },
@@ -386,7 +386,24 @@
       },
       "upstreamDefect": "Wrapper-local ordering defect against a correct upstream-style guard. The page-target guard treats an eval as an unverified page transition, which is right, but compileAgentBrowserDebug emitted its assertion rows (expectedText / expectedSelector / evalExpression) BEFORE its evidence rows (console, errors, network requests, snapshot), so every evidence row after the first eval was refused. A second eval in the same batch is refused too, so multi-assertion calls could not run at all. Fixed by emitting evidence first and assertions last, with a get url re-verify between assertions. The reverify rows are deliberately not eval rows: the report consumes eval rows through a plan-order cursor, so an extra eval would shift every verdict onto the wrong check.",
       "offlineTest": "tests-v2/wave22-debug-step-order.mjs",
-      "verifiedLive": "found live, fix offline-verified and sabotage-verified, pending restart for live confirmation"
+      "verifiedLive": "LIVE-VERIFIED after restart 2026-09-30. `debug actionable` with an expectedSelector, which previously could not run at all ('The active page became unverified'), now completes 6 steps: get url, get title, console, errors, network requests, and the assertion eval. The step-order fix works. Separately, a THIRD debug defect surfaced while verifying it — see P-W22-debug-verdict."
+    },
+    {
+      "id": "P-W22-debug-verdict",
+      "patches": [
+        "W22-debug-verdict-shape"
+      ],
+      "files": [
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js",
+        "tests-v2/wave22-debug-verdict.mjs"
+      ],
+      "sha256": {
+        "dist/extensions/agent-browser/lib/orchestration/browser-run/process-output.js": "52a0c69f09f9e32c9ebfdef703b1579f7e054f9b7b7c5dc92e411aefe52d421e",
+        "tests-v2/wave22-debug-verdict.mjs": "662189455fff7e608e25aed8872a06219de2162cd49297f5734a18ea07bfdf5a"
+      },
+      "upstreamDefect": "Wrapper-local defect against a correct analyzer. analyzeDebugPresetResults expects the CHECKS half of a compiled debug, but process-output.js passed the whole compiled object. The analyzer reads input.expectedText / expectedSelector / evalExpression directly and those live one level down under `.checks`, so getExpectedEvalRoles returned an empty list and no eval row was ever assigned a role. One call site, one property access.",
+      "offlineTest": "tests-v2/wave22-debug-verdict.mjs",
+      "verifiedLive": "BUG FOUND LIVE, fix offline-verified and sabotage-verified, pending restart. A live debug run on a page that does NOT contain the requested text reported expectedTextChecked 0 and 'no failures detected'. Reproduced offline: passing the compiled object yields expectedTextChecked 0 / expectedTextMissing false, passing compiled.checks yields 1 / true. This is a false clean bill of health — a caller is told a page passed assertions that never ran, which is worse than a crash because it is trusted. The test also pins that a SATISFIED assertion still reads as passing, so the fix cannot degenerate into 'always report failure'."
     }
   ]
 }

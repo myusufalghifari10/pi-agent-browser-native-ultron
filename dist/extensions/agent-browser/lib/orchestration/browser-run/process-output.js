@@ -1000,7 +1000,16 @@ export async function processBrowserOutput(input) {
             }
         }
         // local patch: analyze the new modes' payloads for their `details.*Report` fields (PATCHES.md P16-P19).
-        const debugReport = prepared.compiledDebug ? analyzeDebugPresetResults(presentation?.batchSteps ?? [], prepared.compiledDebug).report : undefined;
+        // wave22: this passed the whole compiled object, but analyzeDebugPresetResults expects the
+        // CHECKS half. It reads input.expectedText / input.expectedSelector / input.evalExpression
+        // directly, and on the compiled object those live one level down under `.checks`, so every
+        // role came back empty and every expectedText/expectedSelector/evalExpression verdict was
+        // silently discarded. Found live: a debug report for a page that does NOT contain the
+        // requested text concluded "no failures detected" with expectedTextChecked 0 — a false clean
+        // bill of health, which is the worst shape this defect can take. One call site, so the fix is
+        // one property access; the shape is now asserted in tests-v2/wave22-debug-verdict.mjs by
+        // running the real analyzer both ways.
+        const debugReport = prepared.compiledDebug ? analyzeDebugPresetResults(presentation?.batchSteps ?? [], prepared.compiledDebug.checks ?? prepared.compiledDebug).report : undefined;
         const settleReport = prepared.compiledSettle ? analyzeSettleResult(presentation?.data) : undefined;
         const networkBodyResult = prepared.compiledNetworkBody ? extractNetworkBodies(presentation?.data, prepared.compiledNetworkBody) : undefined;
         const revealSecretsMatchedRows = prepared.revealSecrets ? countRevealedSecretRows(presentation?.data, prepared.revealSecrets) : 0;
