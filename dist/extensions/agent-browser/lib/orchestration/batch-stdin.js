@@ -102,6 +102,36 @@ function trimTrailingClosers(text) {
     }
     return undefined;
 }
+/**
+ * The mirror repair: ADD the closer the text is missing.
+ *
+ * Measured live, same session, two calls. Send a complete valid array and the host itself appends
+ * a `]`, producing text that no longer parses — and it validates that text itself, so the tool body
+ * never runs. Send the same text one `]` SHORT and the host passes it through completely untouched
+ * (30 characters in, 30 characters out) and the wrapper receives it. The host only "repairs" a
+ * string that already parses, so an incomplete one is the shape that actually reaches us.
+ *
+ * Same safety argument as the {item: ...} strip and the trim: only a closer is appended, the result
+ * must parse into an array, and it then goes through full step validation. The bound of 4 is a COST
+ * guard, not a correctness one: appending more closers than the text needs simply fails to parse,
+ * so no test can distinguish the bound. Claiming otherwise would be asserting coverage that does
+ * not exist.
+ */
+function completeMissingClosers(text) {
+    for (let added = 1; added <= 4; added += 1) {
+        const candidate = text + "]".repeat(added);
+        try {
+            const value = JSON.parse(candidate);
+            if (Array.isArray(value)) {
+                return { value, added };
+            }
+        }
+        catch {
+            // keep extending
+        }
+    }
+    return undefined;
+}
 function isItemEnvelope(value) {
     return value !== null
         && typeof value === "object"
@@ -160,6 +190,7 @@ export function parseBatchStdinJsonArray(stdin) {
     let parsed;
     let parsedItemEnvelopes = 0;
     let trimmedTrailingClosers = 0;
+    let completedMissingClosers = 0;
     try {
         // wave4 (live-sweep W-A1): P28 prepareArguments de-stringifies a JSON-string stdin into a
         // real array before this point, so a plain JSON.parse here coerced that array back to a
@@ -178,11 +209,18 @@ export function parseBatchStdinJsonArray(stdin) {
                 // parses into an array. Bounded to 8, because a caller who genuinely wrote junk deserves the
                 // real error rather than a guess about what they meant.
                 const trimmed = trimTrailingClosers(stdin);
-                if (trimmed === undefined) {
-                    throw new SyntaxError("unrecoverable");
+                if (trimmed !== undefined) {
+                    parsed = trimmed.value;
+                    trimmedTrailingClosers = trimmed.removed;
                 }
-                parsed = trimmed.value;
-                trimmedTrailingClosers = trimmed.removed;
+                else {
+                    const completed = completeMissingClosers(stdin);
+                    if (completed === undefined) {
+                        throw new SyntaxError("unrecoverable");
+                    }
+                    parsed = completed.value;
+                    completedMissingClosers = completed.added;
+                }
             }
         }
         else {

@@ -107,6 +107,25 @@ const quoted = parseUserBatchStdin('[["get","url"]]]]banana');
 assert.match(String(quoted.error), /It arrived as string of length \d+/, "a parse failure must report the type and length of what arrived");
 assert.match(String(quoted.error), /banana/, "a parse failure must quote the received text, not just its length");
 
+// The COMPLETE form, one closer short. This is the shape that reaches the wrapper at all, and it
+// is the opposite repair to the trim: the host only "repairs" a string that already parses, so an
+// incomplete one is passed through untouched (30 characters in, 30 out, measured live).
+assert.deepEqual(parseUserBatchStdin('[["get","url"],["get","title"]').steps, [["get", "url"], ["get", "title"]],
+    "the live one-closer-short form must be completed, not rejected");
+
+// Every trailing-closer shape observed live, in both directions.
+assert.deepEqual(parseUserBatchStdin('[["get","url"]]]').steps, [["get", "url"]], "the live one-step double-closer form must be trimmed");
+assert.deepEqual(parseUserBatchStdin('[["get","url"],["get","title"]]]').steps, [["get", "url"], ["get", "title"]],
+    "the live two-step single-closer form must be trimmed");
+assert.deepEqual(parseUserBatchStdin('[["get","url"],["get","title"]').steps, [["get", "url"], ["get", "title"]],
+    "the complete form must stay complete");
+
+// Genuine breakage still errors. The repairs are for one known host defect, not a licence to
+// accept anything that fails to parse.
+assert.ok(parseUserBatchStdin("oops").error, "text that is not JSON at all must still be refused");
+assert.ok(parseUserBatchStdin('{"a":1').error, "a truncated object must not be completed into a step array");
+assert.ok(parseUserBatchStdin('[["get","url"],]').error, "a syntax error in the middle must not be papered over by appending a closer");
+
 // A genuinely non-JSON string is still a JSON parse error, not a coercion claim.
 assert.match(parseBatchStdinJsonArray("click,@e3").error, /could not be parsed as JSON/,
     "a bare comma-joined string is still reported as a parse failure");
