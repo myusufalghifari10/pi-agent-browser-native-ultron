@@ -68,8 +68,14 @@ export function parseBatchCommandArgument(command) {
 }
 function validateUserBatchStep(step, index) {
     if (!Array.isArray(step)) {
+        // Name what actually arrived. A caller who sent [[..],[..]] on this host gets something
+        // that is neither a string nor an array, and "must be a non-empty array" does not let them
+        // tell their own mistake from the host's re-serialization. Guessing here is what cost two
+        // wrong fixes: the first assumed comma-joining, the second assumed flattening, and only a
+        // live call with this in the message can settle which one the host really does.
+        const received = step === null ? "null" : step === undefined ? "undefined" : typeof step === "object" ? `an object with keys [${Object.keys(step).slice(0, 6).join(", ")}]` : typeof step;
         return {
-            error: `agent_browser batch stdin step ${index} must be a non-empty array of string command tokens.${BATCH_STDIN_EXAMPLE}`,
+            error: `agent_browser batch stdin step ${index} must be a non-empty array of string command tokens, but it arrived as ${received}.${BATCH_STDIN_EXAMPLE}`,
             ok: false,
         };
     }

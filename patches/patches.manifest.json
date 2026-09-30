@@ -162,7 +162,7 @@
         "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js"
       ],
       "sha256": {
-        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "b12592b91b87b781db1b829937d372f3dd8eba3edfbfae1e95118e7cbebfe574"
+        "dist/extensions/agent-browser/lib/orchestration/batch-stdin.js": "6d771042202b130ac460b7d7a7539a1d3769e393124645580136df1eda3ff31a"
       },
       "upstreamDefect": "Wave-7 numeric-token coercion was unreachable: the Pi host validates the `stdin` tool param as an array-of-string-arrays before execute() runs, so [[\"mouse\",\"move\",489,119]] never reaches this file on this host. Dead code that misrepresented the contract was deleted; the error still names the offending token type.",
       "verifiedLive": "LIVE-VERIFIED 2026-09-30. The live shape is FLATTENING, not comma-joining: a correct [[\"get\",\"url\"]] arrives as [\"get\",\"url\"], the 2D level lost. The first fix assumed comma-joining and did not fire on the real failure - only the restart plus a live call caught it. The message now reports what actually arrived, names host re-serialization when a multi-token argv or a comma proves it, and stays HEDGED for a lone bare word rather than accusing the host for a hand-built mistake."
