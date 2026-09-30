@@ -41,7 +41,7 @@ for (const key of MODES) {
 import { parseUserBatchStdin } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
 
 const argsDoc = PROPS.args.description;
-assert.match(argsDoc, /args is not iterable/, "args must name the exact error the host throws, so it is recognisable");
+assert.match(argsDoc, /item/i, "args must name the {item:...} envelope the host wraps an array parameter in, so a caller who sees it knows what happened");
 assert.match(argsDoc, /JSON string/i, "args must say the working form is a JSON string");
 // wave22 REVERSED the decision above, on evidence rather than on taste.
 //
@@ -52,21 +52,25 @@ assert.match(argsDoc, /JSON string/i, "args must say the working form is a JSON 
 // an array with no `items` is also invalid JSON Schema (§6.4.1), so the reconstruction had nothing
 // to reconstruct from. The same wrapping is a documented runner bug elsewhere (hermes-agent#104803).
 //
-// So the schema declares a plain string and the ARRAY TOLERANCE lives in the parser instead, where
-// a host that really does pass an array is still served correctly. The test therefore asserts the
-// absence of the array type, because its presence is the bug.
+//
+// CORRECTION: declaring them string-only was also wrong, and the host's own error said so. It
+// prints received arguments verbatim, and they were:
+//     args  as an array  ->  { "item": ["--session","ultron1","get","url"] }   (wrapped)
+//     stdin as a string ->  "[[\"get\",\"url\"],[\"get\",\"title\"]]"           (intact)
+// A string param passes through untouched; an ARRAY param is wrapped in {item: ...}. This harness
+// can only produce the array form for args, so string-only made every call fail with
+// "args: must be string" — the fix produced the failure it was meant to prevent.
+//
+// So both forms are declared, and the array now carries `items`, which the previous version omitted
+// and which is required by JSON Schema 6.4.1 — its absence is what left the runner's reconstruction
+// undefined. Every mangling the host is known to produce is healed in code, so accepting both forms
+// is safe rather than hopeful.
 for (const param of ["args", "stdin"]) {
-    assert.equal(PROPS[param].type, "string", `${param} must be declared a plain string; an array type only provokes the runner's reconstruction`);
-    assert.equal(PROPS[param].items, undefined, `${param} must not declare items; an array type without them is invalid JSON Schema`);
-    assert.match(PROPS[param].description, /JSON string/i, `${param} must name the JSON string as the form to send`);
+    assert.deepEqual(PROPS[param].type, ["string", "array"], `${param} must accept both forms; this harness can only send args as an array`);
+    assert.ok(PROPS[param].items !== undefined, `${param} must declare items; an array type without them is invalid JSON Schema and leaves the runner's reconstruction undefined`);
+    assert.equal(PROPS[param].items.type, "string", `${param} items must be a string, which is what both argv and batch steps contain`);
+    assert.match(PROPS[param].description, /JSON string/i, `${param} must still name the JSON string as a working form`);
 }
-// No parameter anywhere may reintroduce an array type — that is the whole defect class.
-for (const [name, spec] of Object.entries(PROPS)) {
-    const declared = Array.isArray(spec.type) ? spec.type : [spec.type];
-    assert.ok(!declared.includes("array"), `${name} must not declare an array type; the host stringifies params and will mangle it`);
-}
-
-// The tolerance is not lost, it is relocated: a real array still parses and runs.
 assert.deepEqual(parseUserBatchStdin('[["get","url"]]').steps, [["get","url"]], "the documented JSON-string form must parse");
 assert.deepEqual(parseUserBatchStdin([["get", "url"]]).steps, [["get", "url"]], "a host that does pass a real array must still be served");
 assert.match(PROPS.stdin.description, /batch/i, "stdin must be described for batch steps");

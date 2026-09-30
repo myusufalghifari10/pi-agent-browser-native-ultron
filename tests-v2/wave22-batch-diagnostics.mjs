@@ -21,6 +21,7 @@ import assert from "node:assert/strict";
 
 import { parseBatchStdinJsonArray } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
 import { getBatchFailureDetails } from "../dist/extensions/agent-browser/lib/results/presentation/batch.js";
+import { extractUpstreamCommandTokens } from "../dist/extensions/agent-browser/lib/argv-descriptor.js";
 import { parseUserBatchStdin } from "../dist/extensions/agent-browser/lib/orchestration/batch-stdin.js";
 
 // ---- 1. the comma-join diagnostic ------------------------------------------------------
@@ -117,6 +118,19 @@ const mixed = parseBatchStdinJsonArray([["click", "a"], "oops"]);
 assert.equal(mixed.error, undefined, "a mixed array is not a coercion symptom, so parse must not reject it here");
 assert.ok(!/COMMA-JOINED/.test(String(mixed.error)), "never blame the host for a hand-built mixed array");
 
+// ---- 1b. the same envelope, but on `args` -----------------------------------------------
+//
+// The host prints received arguments verbatim, which is how both shapes were told apart:
+//     args  as an array  ->  { "item": ["--session","ultron1","get","url"] }
+//     stdin as a string ->  "[[\"get\",\"url\"],[\"get\",\"title\"]]"   (intact)
+// So the {item: ...} envelope is not batch-specific, and argv needs the same repair.
+assert.deepEqual(extractUpstreamCommandTokens({ item: ["--session", "ultron1", "get", "url"] }), ["get", "url"],
+    "the live argv envelope must be unwrapped, not treated as a command");
+assert.deepEqual(extractUpstreamCommandTokens(["--session", "ultron1", "get", "url"]), ["get", "url"],
+    "a plain argv array must be untouched");
+assert.deepEqual(extractUpstreamCommandTokens(["batch", "--bail", "get", "url"]), ["batch", "--bail", "get", "url"],
+    "a plain argv array with no session must be untouched");
+
 // ---- 2. the missing-settle diagnostic ---------------------------------------------------
 
 const step = (ok, commandText) => ({ details: { success: ok, commandText, index: 0 } });
@@ -167,4 +181,4 @@ assert.equal(first.missingSettleHint, undefined, "a first-step failure has no pr
 // A fully successful batch has no failure details at all.
 assert.equal(getBatchFailureDetails([step(true, 'click a'), step(true, 'click b')]), undefined, "a clean batch reports no failure");
 
-console.log("wave22-batch-diagnostics: all assertions passed (item envelopes stripped recursively, working forms provably untouched, a lone bare word keeps the wave11 wording, parse errors quote what arrived, missing-settle flagged only after a page-changing step)");
+console.log("wave22-batch-diagnostics: all assertions passed (item envelopes stripped from both stdin and argv, working forms provably untouched, a lone bare word keeps the wave11 wording, parse errors quote what arrived, missing-settle flagged only after a page-changing step)");

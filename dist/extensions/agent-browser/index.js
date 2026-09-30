@@ -1362,32 +1362,34 @@ export default function agentBrowserExtension(pi, { beforeExecute } = {}) {
     // The fallback carries a description too, so a parameter added to the mode list later can
     // never come back as an undocumented `{}` — which is the exact defect this wave fixes.
     const STR_OR_OBJ_DOC = { type: ["string", "object"], description: "Mode payload. See COMMAND_REFERENCE.md for this mode's fields." };
-    // wave22: argv and batch steps are declared PLAIN STRING, with no array in the type at all.
+    // wave22, corrected after a wrong turn.
     //
-    // This Pi build serialises every tool parameter to a string (earendil-works/pi#4226, closed
-    // as big-refactor). So when the schema ALSO says "array", the runner sees a declared array
-    // receiving a string and tries to reconstruct one — and does it four different ways, all
-    // observed live: nested {item: ...} wrappers, trailing "]" appended to the text, a rejected
-    // "invalid type: map", and a step object arriving where an array should be. The same
-    // {item: [...]} wrapping is a documented runner bug in a sibling agent (hermes-agent#104803).
+    // The first attempt declared args/stdin a PLAIN STRING, reasoning that this Pi build
+    // serialises parameters to strings (earendil-works/pi#4226) and that declaring an array only
+    // provokes the runner into rebuilding one. The reasoning was right and the fix was wrong:
+    // the host's own validator prints the received arguments verbatim, and it showed that
+    //     args  as an array  ->  { "item": ["--session","ultron1","get","url"] }
+    //     stdin as a string ->  "[[\"get\",\"url\"],[\"get\",\"title\"]]"      (intact)
+    // A string param is passed through untouched; an ARRAY param is wrapped in {item: ...}. This
+    // harness can only produce the array form for args, so declaring args as string-only made every
+    // call fail validation with "args: must be string" — the fix caused the failure it was meant
+    // to prevent. Same {item: [...]} wrapping is a documented runner bug in hermes-agent#104803.
     //
-    // Declaring an array without `items` is also invalid JSON Schema (§6.4.1), so the old
-    // ["string","array"] was asking for a reconstruction nothing could define. Removing "array"
-    // means there is nothing to reconstruct and the string arrives intact.
-    //
-    // The parser still ACCEPTS a real array, so a host that passes one is served correctly; this
-    // only stops us from provoking the bug.
-    const STR_OR_ARR = { type: "string" };
+    // So both forms are declared, WITH `items` this time. Declaring an array without items is
+    // invalid JSON Schema 6.4.1, which is what left the runner's reconstruction undefined; every
+    // mangling this host is known to produce is healed in the parser — the {item: ...} strip and
+    // the trailing-closer trim — so accepting both forms is now safe rather than merely hopeful.
+    const STR_OR_ARR = { type: ["string", "array"], items: { type: "string" } };
     // Bare type pair, used only where a description follows in the spread below.
     const STR_OR_OBJ = { type: ["string", "object"] };
     const agentBrowserParamDocs = {
         args: {
             ...STR_OR_ARR,
-            description: 'Raw argv tokens, e.g. ["get","url"] or ["click","@e3"]. Pass as a JSON STRING on this host: {"args":"[\\"get\\",\\"url\\"]"}. This build serialises every tool parameter to a string, so declaring an array here only makes the runner try to rebuild one. (An older schema rejected a raw array with "args is not iterable"; seeing that means you are on the pre-wave22 schema.)',
+            description: 'Raw argv tokens, e.g. ["get","url"] or ["click","@e3"]. Either form works: an array, which this host may deliver wrapped as {item:[...]}, or a JSON string. The wrapper unwraps both.',
         },
         stdin: {
             ...STR_OR_ARR,
-            description: 'Batch steps as array-of-arrays, e.g. [["get","url"],["snapshot","-i"]], or a string of free text for `eval`/`script`. Pass as a JSON STRING on this host: {"stdin":"[[\\"get\\",\\"url\\"]]"}. The parser also accepts a real array, but do not send one: it arrives mangled.',
+            description: 'Batch steps as array-of-arrays, e.g. [["get","url"],["snapshot","-i"]], or a string of free text for `eval`/`script`. Either form works: a JSON string {"stdin":"[[\\"get\\",\\"url\\"]]"} arrives intact, an array may arrive wrapped as {item:[...]} or with a trailing "]". The wrapper heals both.',
         },
         script: { type: "string", description: "One-shot JavaScript executed against a throwaway session." },
         timeoutMs: { type: "number", description: "Wall-clock budget for the whole call." },

@@ -29,9 +29,29 @@ export function findCommandStartIndex(args) {
     }
     return undefined;
 }
+/**
+ * This host delivers an ARRAY tool parameter wrapped in an envelope: `args: ["--session","s","get",
+ * "url"]` reaches the tool as `{item: ["--session","s","get","url"]}`. The same wrapping is a
+ * documented runner bug (hermes-agent#104803), and a string parameter arrives intact by contrast,
+ * which is how the two shapes were told apart.
+ *
+ * A plain argv array can never legitimately be an object, so unwrapping cannot change the meaning
+ * of anything that previously worked. Recursive, because the host wraps array elements at every
+ * depth; a string is returned untouched.
+ */
+function unwrapArgvEnvelope(args) {
+    if (Array.isArray(args)) {
+        return args.map(unwrapArgvEnvelope);
+    }
+    if (args !== null && typeof args === "object" && !Array.isArray(args) && Object.keys(args).length === 1 && "item" in args) {
+        return unwrapArgvEnvelope(args.item);
+    }
+    return args;
+}
 export function extractCommandTokens(args) {
-    const commandStartIndex = findCommandStartIndex(args);
-    return commandStartIndex === undefined ? [] : args.slice(commandStartIndex);
+    const unwrapped = unwrapArgvEnvelope(args);
+    const commandStartIndex = findCommandStartIndex(unwrapped);
+    return commandStartIndex === undefined ? [] : unwrapped.slice(commandStartIndex);
 }
 export function extractUpstreamCommandTokens(args) {
     return stripUpstreamGlobalFlags(extractCommandTokens(args));
