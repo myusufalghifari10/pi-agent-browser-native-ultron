@@ -19,7 +19,7 @@
 import assert from "node:assert/strict";
 
 import { isItemEnvelope, unwrapItemEnvelope } from "../dist/extensions/agent-browser/lib/input-modes/shared.js";
-import { compileAgentBrowserJob } from "../dist/extensions/agent-browser/lib/input-modes/job.js";
+import { compileAgentBrowserJob, compileAgentBrowserQaPreset } from "../dist/extensions/agent-browser/lib/input-modes/job.js";
 import { compileAgentBrowserDebug } from "../dist/extensions/agent-browser/lib/input-modes/debug.js";
 import { normalizeCdpInput } from "../dist/extensions/agent-browser/lib/input-modes/cdp.js";
 
@@ -84,12 +84,76 @@ const read = (f) => readFileSync(new URL(`../dist/extensions/agent-browser/lib/i
 // parameter name would not contain, so a duplicated definition passed it — a test that survives
 // sabotage proves nothing. It now checks the two things that actually matter: the module imports the
 // helper, and it does not declare a local function of the same name.
-for (const mode of ["job.js", "debug.js", "cdp.js"]) {
+// The list must cover every site the shared.js comment names. If it shrank, the comment would be
+// asserting sites this test never looks at — which is exactly the overclaim a review lane caught.
+const ENVELOPE_SITES = ["job.js", "debug.js", "cdp.js", "electron.js", "vault-mode.js"];
+for (const mode of [...ENVELOPE_SITES, "shared.js"]) {
     const src = read(mode);
-    assert.match(src, /import \{[^}]*\b(?:unwrapItemEnvelope|isItemEnvelope)\b[^}]*\} from "\.\/shared\.js";/,
+    if (mode === "shared.js") {
+        assert.match(src, /export function isItemEnvelope/, "shared.js must be where the one definition lives");
+        continue;
+    }
+    assert.match(src, /import \{[^}]*\b(?:unwrapItemEnvelope|unwrapItemEnvelopeDeep|isItemEnvelope)\b[^}]*\} from "\.\/shared\.js";/,
         `${mode} must import the envelope helper from shared.js`);
     assert.doesNotMatch(src, /function (?:isItemEnvelope|unwrapItemEnvelope)\s*\(/,
-        `${mode} re-defines the envelope helper locally; one definition only, or the five sites will drift`);
+        `${mode} re-defines the envelope helper locally; one definition only, or the eight sites will drift`);
+}
+for (const site of ENVELOPE_SITES) {
+    assert.match(read(site), /unwrapItemEnvelopeDeep|unwrapItemEnvelope/,
+        `${site} is listed as healed in the shared.js comment and must actually use the helper`);
 }
 
-console.log("wave23-host-array-envelope: all assertions passed (all five array sites healed, correct input untouched, free-form CDP params survive, one shared definition)");
+console.log("wave23-host-array-envelope: all assertions passed (all eight array sites healed, correct input untouched, free-form CDP params survive, one shared definition)");
+
+// --- multi-level envelopes ------------------------------------------------------------------
+// Confirmed live: a payload wrapped twice was refused with the OUTER error while the plain form of the
+// same job worked, so a single-level strip is not enough. Bounded so it cannot loop on shaped input.
+import { unwrapItemEnvelopeDeep } from "../dist/extensions/agent-browser/lib/input-modes/shared.js";
+assert.deepEqual(unwrapItemEnvelopeDeep({ item: { item: ["a"] } }), ["a"], "a double-wrapped array is fully unwrapped");
+assert.deepEqual(unwrapItemEnvelopeDeep({ item: { item: { item: ["a"] } } }), ["a"], "and a triple-wrapped one");
+assert.deepEqual(unwrapItemEnvelopeDeep(["a"]), ["a"], "a plain array is unchanged");
+assert.deepEqual(unwrapItemEnvelopeDeep({ a: 1 }), { a: 1 }, "a plain object is unchanged");
+assert.deepEqual(unwrapItemEnvelopeDeep(undefined), undefined, "undefined is unchanged");
+
+// A job whose steps arrive double-wrapped must still compile, and to the same thing.
+const plainJob = compileAgentBrowserJob({ session: "u1", steps });
+assert.equal(compileAgentBrowserJob({ session: "u1", steps: { item: { item: steps } } }).compiled.stdin, plainJob.compiled.stdin,
+    "a double-wrapped job.steps must compile to exactly the same steps");
+
+// The bound only limits wasted work — anything deeper simply stops being stripped, which then fails
+// the shape check with an honest message rather than looping.
+// The bound stops the loop and hands back the still-wrapped remainder. That remainder is not an
+// array, so every shape check downstream refuses it with its own honest message rather than looping
+// or silently accepting. The first version of this assertion expected undefined and failed: what is
+// actually returned is the leftover object, which is safe for a different reason than "it is absent".
+const overDeep = unwrapItemEnvelopeDeep({ item: { item: { item: { item: { item: { item: { item: { item: { item: "x" } } } } } } } } });
+assert.equal(Array.isArray(overDeep), false, "an over-deep envelope must not resolve to an array");
+assert.equal(overDeep === undefined, false, "it is returned, not discarded — downstream shape checks reject it by name");
+assert.match(compileAgentBrowserJob({ session: "u1", steps: overDeep }).error ?? "", /job\.steps/,
+    "and job names the real problem rather than looping or passing silently");
+
+// --- select `values`, qa.expectedText, electron and vault -----------------------------------
+import { getSelectValues } from "../dist/extensions/agent-browser/lib/input-modes/shared.js";
+const selectOk = getSelectValues({ values: ["a", "b"] }, "job.steps[0]");
+assert.equal(selectOk.error, undefined, "select values must accept a plain array");
+assert.deepEqual(getSelectValues({ values: { item: ["a", "b"] } }, "job.steps[0]").values, ["a", "b"],
+    "select values must accept the host envelope — confirmed live as 'job.steps must be a non-empty array'");
+assert.match(getSelectValues({ values: [] }, "job.steps[0]").error ?? "", /non-empty array/,
+    "an empty values array must still be refused");
+assert.match(getSelectValues({ values: [""] }, "job.steps[0]").error ?? "", /non-empty strings/,
+    "a blank value must still be refused");
+assert.match(getSelectValues({}, "job.steps[0]").error ?? "", /is required/, "neither value nor values must still be refused");
+assert.match(getSelectValues({ value: "a", values: ["b"] }, "job.steps[0]").error ?? "", /cannot both/,
+    "value together with values must still be refused");
+
+// qa is compiled by its own preset compiler, not by the job compiler — an earlier version of this
+// test passed a `qa` key to compileAgentBrowserJob, which reported "job.steps must be a non-empty
+// array" and would have read as a code failure rather than a wrong call.
+const qaCompiled = compileAgentBrowserQaPreset({ url: "https://example.com/", expectedText: { item: ["a", "b"] } });
+assert.equal(qaCompiled.error, undefined, "qa.expectedText must accept the host envelope");
+assert.equal(compileAgentBrowserQaPreset({ url: "https://example.com/", expectedText: ["a", "b"] }).error, undefined,
+    "and the plain array form must keep working");
+assert.match(compileAgentBrowserQaPreset({ url: "https://example.com/", expectedText: { item: [""] } }).error ?? "", /qa\.expectedText/,
+    "qa.expectedText must still refuse a blank entry");
+assert.match(compileAgentBrowserQaPreset({ url: "https://example.com/", expectedText: { item: 5 } }).error ?? "", /qa\.expectedText/,
+    "qa.expectedText must still refuse junk");

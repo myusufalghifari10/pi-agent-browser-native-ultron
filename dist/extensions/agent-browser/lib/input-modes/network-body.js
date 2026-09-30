@@ -60,18 +60,25 @@ export function normalizeNetworkBodyInput(input) {
     }
     return { value: { clampedFrom, direction, maxChars, requestId, urlFilter } };
 }
-export function compileNetworkBodyRequest({ requestId, urlFilter } = {}) {
+export function compileNetworkBodyRequest({ clampedFrom, maxChars, requestId, urlFilter } = {}) {
+    // wave23: maxChars above the cap was clamped to NETWORK_BODY_MAX_CHARS and `clampedFrom` was
+    // computed and carried, and then READ NOWHERE — all four occurrences were inside the normalizer.
+    // A caller asking for 99999 characters silently got 40000 and was told nothing, which is the
+    // silent-truncation shape this wave keeps finding. Now stated in the note the caller actually sees.
+    const clampNote = typeof clampedFrom === "number"
+        ? ` Requested maxChars ${clampedFrom} exceeds the ${NETWORK_BODY_MAX_CHARS} character ceiling, so the body was capped at ${maxChars}.`
+        : "";
     if (typeof requestId === "string" && requestId.trim().length > 0) {
         const id = requestId.trim();
         return {
             args: ["network", "request", id],
-            note: `Reading full detail for request ${id}. Bodies only appear when the installed agent-browser build recorded them; when they are missing, start a HAR capture with content instead.`,
+            note: `Reading full detail for request ${id}. Bodies only appear when the installed agent-browser build recorded them; when they are missing, start a HAR capture with content instead.${clampNote}`,
         };
     }
     if (typeof urlFilter === "string" && urlFilter.trim().length > 0) {
         return {
             args: ["network", "requests", "--filter", urlFilter.trim()],
-            note: "Request lists usually omit bodies: read the requestId from a matching row, then call networkBody again with that id.",
+            note: "Request lists usually omit bodies: read the requestId from a matching row, then call networkBody again with that id." + clampNote,
         };
     }
     return {

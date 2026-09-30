@@ -1,3 +1,5 @@
+import { unwrapItemEnvelopeDeep } from "./shared.js";
+
 import { isRecord } from "../parsing.js";
 import { AGENT_BROWSER_ELECTRON_ACTIONS, AGENT_BROWSER_ELECTRON_HANDOFFS, AGENT_BROWSER_ELECTRON_LIST_FIELDS, AGENT_BROWSER_ELECTRON_PROBE_FIELDS, AGENT_BROWSER_ELECTRON_RESERVED_APP_ARGS, AGENT_BROWSER_ELECTRON_TARGET_TYPES, } from "./types.js";
 function validateOptionalNonEmptyString(input, fieldName) {
@@ -10,7 +12,11 @@ function validateOptionalNonEmptyString(input, fieldName) {
     return { value: value.trim() };
 }
 function validateOptionalElectronStringArray(input, fieldName) {
-    const value = input[fieldName];
+    // Caller-supplied array parameter, refused by the host for the same reason as the other four
+    // sites. The wave23 comment claimed electron was healed while this file never imported the
+    // helper — a comment asserting a fix that did not exist. Correcting the code is not enough; the
+    // comment and the test that repeated the claim are corrected too.
+    const value = unwrapItemEnvelopeDeep(input[fieldName]);
     if (value === undefined)
         return undefined;
     if (!Array.isArray(value) || value.some((item) => typeof item !== "string" || item.trim().length === 0)) {

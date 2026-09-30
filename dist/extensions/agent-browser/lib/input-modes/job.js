@@ -1,7 +1,7 @@
 import { isRecord } from "../parsing.js";
 import { withOptionalSessionArgs } from "../results/next-actions.js";
 import { summarizeNetworkFailures } from "../results/network.js";
-import { getBatchResultItems, getCommandNameFromBatchItem, getSelectValues, isItemEnvelope } from "./shared.js";
+import { getBatchResultItems, getCommandNameFromBatchItem, getSelectValues, isItemEnvelope, unwrapItemEnvelopeDeep } from "./shared.js";
 import { compileAgentBrowserSemanticAction } from "./semantic-action.js";
 import { AGENT_BROWSER_JOB_STEP_ACTIONS, AGENT_BROWSER_JOB_TYPE_DELAYED_TEXT_MAX_CHARACTERS, AGENT_BROWSER_QA_LOAD_STATES, } from "./types.js";
 // wave9 (open loop W-O1): an optional `session` on job/qa makes the compiled batch run on a
@@ -267,12 +267,12 @@ export function compileAgentBrowserJob(input) {
     if (session.error) {
         return { error: session.error };
     }
-    const rawStepsEnvelope = unwrappedInput.steps;
+    const rawStepsEnvelope = unwrapItemEnvelopeDeep(unwrappedInput.steps);
     if (!isItemEnvelope(rawStepsEnvelope) && (!Array.isArray(rawStepsEnvelope) || rawStepsEnvelope.length === 0)) {
         return { error: "job.steps must be a non-empty array." };
     }
     // The envelope can sit on the job itself or on `steps`; the host has been seen to use both.
-    const rawSteps = isItemEnvelope(rawStepsEnvelope) ? rawStepsEnvelope.item : rawStepsEnvelope;
+    const rawSteps = unwrapItemEnvelopeDeep(rawStepsEnvelope);
     if (!Array.isArray(rawSteps) || rawSteps.length === 0) {
         return { error: "job.steps must be a non-empty array." };
     }
@@ -602,12 +602,15 @@ export function compileAgentBrowserQaPreset(input) {
         return { error: "qa.url must be a non-empty string." };
     }
     const normalizedUrl = typeof url === "string" ? url.trim() : undefined;
+    // qa.expectedText is a caller-supplied array parameter like debug.expectedText, and was refused
+    // for the same reason with a message blaming the caller for a payload that was exactly right.
+    const rawExpectedText = unwrapItemEnvelopeDeep(input.expectedText);
     const expectedText = input.expectedText === undefined
         ? []
-        : typeof input.expectedText === "string"
-            ? [input.expectedText]
-            : Array.isArray(input.expectedText)
-                ? input.expectedText
+        : typeof rawExpectedText === "string"
+            ? [rawExpectedText]
+            : Array.isArray(rawExpectedText)
+                ? rawExpectedText
                 : undefined;
     if (!expectedText || expectedText.some((text) => typeof text !== "string" || text.trim().length === 0)) {
         return { error: "qa.expectedText must be a non-empty string or array of non-empty strings when provided." };

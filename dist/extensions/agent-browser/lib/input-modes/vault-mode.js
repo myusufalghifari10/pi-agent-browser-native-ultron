@@ -10,6 +10,7 @@
 import { isRecord } from "../parsing.js";
 import { VAULT_FILL_ROLES } from "../vault/fill.js";
 import { normalizeVaultHandle, normalizeVaultOrigin, sanitizeVaultSecret } from "../vault/store.js";
+import { unwrapItemEnvelopeDeep } from "./shared.js";
 
 export const VAULT_ACTIONS = ["status", "list", "save", "fill", "totp", "remove", "unlock"];
 export const VAULT_SAVE_TYPES = ["login", "totp", "card", "address"];
@@ -123,14 +124,17 @@ function validateOrigin(input, { required }) {
 }
 
 function validateVaultFillFields(input) {
+    // Caller-supplied array parameter. vault.fill is how a caller types several fields at once, so
+    // refusing its array here means the whole fill path is unreachable from a real tool call.
+    const rawFields = unwrapItemEnvelopeDeep(input.fields);
     if (input.fields === undefined) {
         return {};
     }
-    if (!Array.isArray(input.fields)) {
+    if (!Array.isArray(rawFields)) {
         return { error: "vault.fill fields must be an array of { role, selector? } objects." };
     }
     const fields = [];
-    for (const [index, field] of input.fields.entries()) {
+    for (const [index, field] of rawFields.entries()) {
         if (!isRecord(field)) {
             return { error: `vault.fill fields[${index}] must be an object with a role.` };
         }

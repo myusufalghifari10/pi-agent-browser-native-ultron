@@ -438,6 +438,27 @@ export async function analyzeNetworkSourceLookupResults(data, compiled, cwd) {
         "Experimental network source hints report candidates only; failed requests can be triggered indirectly by frameworks, caches, service workers, or third-party scripts.",
         "Initiator/source-map metadata is upstream/browser-build dependent and may be absent.",
     ];
+    // wave23, found by a reviewer lane and confirmed before fixing: with no batch rows this function
+    // fell straight through to `status: "no-failed-requests"` and the headline "Network source lookup
+    // found no failed requests." Nothing had been inspected. Confirmed for all five empty shapes
+    // (undefined, null, [], {}, {requests:[]}) while analyzeDebugPresetResults, in the same codebase,
+    // correctly reports "no batch steps were returned, so nothing was inspected" for the identical
+    // case. A caller reading that headline concludes a clean network; the truth is an absent result.
+    // A `network requests` result that actually ran always carries a `requests` array — verified
+    // against real batch artifacts, where the row result is {requests: [...], lifecycle}. So a record
+    // with no `requests` key, or an empty array, means the command did not produce a row rather than
+    // that it found nothing. Only a populated `requests` array is a real answer, including when it
+    // is empty, because that is the upstream having run and found no failures.
+    const inspectedSomething = Array.isArray(data) ? data.length > 0 : isRecord(data) && Array.isArray(data.requests);
+    if (!inspectedSomething) {
+        return {
+            candidates: [],
+            failedRequests: [],
+            limitations: [...limitations, "No batch rows were returned for this lookup, so the network was not inspected. This is an absent result, not a clean one."],
+            status: "no-results",
+            summary: "Network source lookup returned no batch rows, so nothing was inspected. This is NOT a clean result.",
+        };
+    }
     const failedRequests = getFailedNetworkRequests(data, compiled.query.url ?? compiled.query.filter);
     const candidates = [];
     collectInitiatorCandidates(data, failedRequests, candidates);
