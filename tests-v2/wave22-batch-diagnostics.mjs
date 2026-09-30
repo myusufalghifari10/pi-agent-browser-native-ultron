@@ -42,24 +42,37 @@ assert.deepEqual(okString.steps, [["click", "@e3"]]);
 //
 // A step is always an array of tokens, so {item: ...} can never be a legitimate step. Stripping
 // the envelope therefore turns a hard failure into the call the caller meant to make.
-assert.deepEqual(parseUserBatchStdin([{ item: ["get", "url"] }]).steps, [["get", "url"]], "the live one-row envelope must be unwrapped, not rejected");
-assert.deepEqual(parseUserBatchStdin([{ item: ["get", "url"] }, { item: ["get", "title"] }]).steps,
-    [["get", "url"], ["get", "title"]], "the two-row envelope must be unwrapped too");
+// The wrapper is RECURSIVE: a live two-row call that unwrapped only the outer level then failed
+// with "token 0 must be a string (got object)", which is what exposed the inner level. This is
+// the shape as it actually arrives.
+const liveTwo = parseUserBatchStdin([{ item: [{ item: "get" }, { item: "url" }] }, { item: [{ item: "get" }, { item: "title" }] }]);
+assert.deepEqual(liveTwo.steps, [["get", "url"], ["get", "title"]], "the live recursive envelope must be unwrapped, not rejected");
+assert.equal(liveTwo.itemEnvelopesStripped, 6, "the number of envelopes stripped must be reported, not hidden");
 
-// Unwrap only when EVERY element is exactly the envelope. A partial unwrap would silently accept a
-// mixed shape and run steps the caller never wrote, which is worse than the error it replaces.
+// Outer-only, from the first live sighting.
+assert.deepEqual(parseUserBatchStdin([{ item: ["get", "url"] }]).steps, [["get", "url"]], "the outer envelope must be unwrapped too");
+
+// A partially-enveloped batch is not a reason to refuse: stripping what IS an envelope leaves
+// exactly the steps the caller wrote, and the un-enveloped rows were already valid. The earlier
+// "refuse on any partial" rule was wrong for the same reason the guess was wrong — it assumed the
+// envelope could be anywhere it was not.
 const partial = parseUserBatchStdin([{ item: ["get", "url"] }, ["get", "title"]]);
-assert.ok(partial.error, "a partially-enveloped batch must be refused, not half-accepted");
-assert.match(partial.error, /arrived as an object with keys \[item\]/, "the refused step must name what it really was");
+assert.deepEqual(partial.steps, [["get", "url"], ["get", "title"]], "a mixed batch must still produce the steps that were written");
+assert.equal(partial.itemEnvelopesStripped, 1, "only the real envelope counts as stripped");
 
-// A two-key object is not the envelope, so it must not be unwrapped either.
+// A two-key object is NOT the envelope and must survive as the invalid thing it is.
 const twoKeys = parseUserBatchStdin([{ item: ["get", "url"], extra: 1 }]);
 assert.ok(twoKeys.error, "an object with more than the item key is not the host envelope");
 assert.match(twoKeys.error, /keys \[item, extra\]/, "all received keys must be named");
 
-// The forms that already worked must keep working.
-assert.deepEqual(parseUserBatchStdin([["get", "url"]]).steps, [["get", "url"]], "a plain 2-D array must be untouched");
+// The forms that already worked must keep working, and must report ZERO envelopes stripped.
+// That is the structural safety argument made executable: batch validation requires every token to
+// be a string, so no object can appear in a batch that would have validated — stripping {item:...}
+// is provably a no-op on every input that already worked.
+assert.deepEqual(parseUserBatchStdin([["get", "url"], ["get", "title"]]).steps, [["get", "url"], ["get", "title"]], "a plain 2-D array must be untouched");
+assert.equal(parseUserBatchStdin([["get", "url"]]).itemEnvelopesStripped, 0, "a plain 2-D array must report nothing stripped");
 assert.deepEqual(parseUserBatchStdin('[["get","url"]]').steps, [["get", "url"]], "the JSON-string form must be untouched");
+assert.equal(parseUserBatchStdin('[["get","url"]]').itemEnvelopesStripped, 0, "the JSON-string form must report nothing stripped");
 
 // The shape that ACTUALLY happens on this host, observed live after a restart: a correct
 // [["get","url"]] arrives as ["get","url"] — the 2D level is lost. The first version of this fix
@@ -147,4 +160,4 @@ assert.equal(first.missingSettleHint, undefined, "a first-step failure has no pr
 // A fully successful batch has no failure details at all.
 assert.equal(getBatchFailureDetails([step(true, 'click a'), step(true, 'click b')]), undefined, "a clean batch reports no failure");
 
-console.log("wave22-batch-diagnostics: all assertions passed (item envelope stripped, working forms still parse, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");
+console.log("wave22-batch-diagnostics: all assertions passed (item envelopes stripped recursively, working forms provably untouched, a lone bare word keeps the wave11 wording plus a hint, missing-settle flagged only after a page-changing step)");

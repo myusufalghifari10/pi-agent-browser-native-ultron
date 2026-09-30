@@ -66,14 +66,41 @@ export function parseBatchCommandArgument(command) {
         tokens.push(token);
     return tokens.length > 0 ? { step: tokens } : { error: "batch command is empty" };
 }
-/** The host's nested-array envelope: an object whose ONLY key is `item` and whose value is an array. */
+/**
+ * The host's array-element envelope: an object whose ONLY key is `item`.
+ *
+ * wave22 LIVE, confirmed by reading what the wrapper actually received: this host wraps EVERY
+ * array element recursively, so a correct
+ *     [["get","url"],["get","title"]]
+ * arrives as
+ *     [{item:[{item:"get"},{item:"url"}]}, {item:[{item:"get"},{item:"title"}]}]
+ * The outer wrapper alone was not enough — unwrapping one level then failed with "token 0 must be
+ * a string (got object)", which is what exposed the inner level. Two earlier fixes were wrong
+ * guesses (comma-joining, then flattening) and neither would ever have fired.
+ *
+ * Unwrapping is SAFE, not a guess, and the reason is structural: batch validation requires every
+ * token to be a string, so no object can appear anywhere in a batch that would have validated.
+ * Stripping {item: ...} is therefore a no-op on every input that already worked, and can only turn
+ * a rejected input into the call the caller wrote. Validation remains the safety net either way.
+ */
 function isItemEnvelope(value) {
     return value !== null
         && typeof value === "object"
         && !Array.isArray(value)
         && Object.keys(value).length === 1
-        && "item" in value
-        && Array.isArray(value.item);
+        && "item" in value;
+}
+function unwrapItemEnvelopes(value, stats) {
+    if (Array.isArray(value)) {
+        return value.map((entry) => unwrapItemEnvelopes(entry, stats));
+    }
+    if (isItemEnvelope(value)) {
+        if (stats !== undefined) {
+            stats.count += 1;
+        }
+        return unwrapItemEnvelopes(value.item, stats);
+    }
+    return value;
 }
 function validateUserBatchStep(step, index) {
     if (!Array.isArray(step)) {
@@ -112,6 +139,7 @@ export function parseBatchStdinJsonArray(stdin) {
         return { steps: [] };
     }
     let parsed;
+    let parsedItemEnvelopes = 0;
     try {
         // wave4 (live-sweep W-A1): P28 prepareArguments de-stringifies a JSON-string stdin into a
         // real array before this point, so a plain JSON.parse here coerced that array back to a
@@ -130,21 +158,11 @@ export function parseBatchStdinJsonArray(stdin) {
         // which describes the shape and never the cause, so a caller could not find the fix: the
         // steps must be sent as a JSON string. Both shapes are invalid — a valid step is always an
         // array — so blaming the host is only ever a guess, and the message says so.
-        // wave22 LIVE: this host wraps every nested array parameter in an {item: ...} envelope, so
-        // a correct [["get","url"],["get","title"]] arrives as
-        //     [{item:["get","url"]}, {item:["get","title"]}]
-        // Confirmed by two live calls, one row and two rows, both reporting "arrived as an object
-        // with keys [item]". Two earlier fixes were wrong because both guessed at this: comma
-        // joining, then flattening. Neither matched; only reading the received shape settled it.
-        //
-        // A step is ALWAYS an array of tokens, so {item: ...} can never be a legitimate step. That
-        // makes the envelope safe to strip rather than merely describe, and stripping it turns a
-        // hard failure into the call the caller meant to make. Unwrap only when EVERY element is
-        // exactly this envelope — a partial unwrap would silently accept a mixed shape and run
-        // steps that were not what the caller wrote.
-        if (Array.isArray(parsed) && parsed.length > 0 && parsed.every((row) => isItemEnvelope(row))) {
-            parsed = parsed.map((row) => row.item);
-        }
+        // Strip the host's {item: ...} envelope at every depth, then keep every existing rule.
+        // See unwrapItemEnvelopes for why this is safe rather than a guess.
+        const envelopeStats = { count: 0 };
+        parsed = unwrapItemEnvelopes(parsed, envelopeStats);
+        parsedItemEnvelopes = envelopeStats.count;
 
         if (parsed.length > 0 && parsed.every((row) => typeof row === "string")) {
             // More than one plain string is a flattened argv: a single step is always one array,
@@ -163,7 +181,7 @@ export function parseBatchStdinJsonArray(stdin) {
                 error: `agent_browser batch stdin step 0 must be a non-empty array of string command tokens. If you meant [["get","url"]], send stdin as a JSON STRING: {"stdin": "[[\\"get\\",\\"url\\"]]"} — a nested array parameter is re-serialized by this host, so the array form may not survive.${BATCH_STDIN_EXAMPLE}`,
             };
         }
-        return { steps: parsed };
+        return { steps: parsed, itemEnvelopesStripped: parsedItemEnvelopes };
     }
     catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -183,7 +201,7 @@ export function parseUserBatchStdin(stdin) {
         }
         steps.push(validated.step);
     }
-    return { steps };
+    return { steps, itemEnvelopesStripped: parsed.itemEnvelopesStripped ?? 0 };
 }
 /**
  * The batch steps upstream will actually execute: run_batch uses raw batch
